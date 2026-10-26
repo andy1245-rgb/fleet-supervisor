@@ -1,0 +1,47 @@
+{
+	"recordedAt": "2026-10-26T21:59:25.120Z",
+	"model": "openrouter:z-ai/glm-5.3-flash",
+	"taskSetSha": "b9765d1a55e18b4e",
+	"n": 40,
+	"ops": {
+		"exactMatch": 0.35,
+		"perOpRecall": {
+			"flag": 0,
+			"nudge": 0.4
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 1,
+			"0.5": 1,
+			"0.7": 0.575,
+			"0.9": 0.025
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0.35,
+			"0.5": 0.35,
+			"0.7": 0.1739,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"weights": {
+			"leave": 5,
+			"declare_done": 4,
+			"flag": 2,
+			"nudge": 1
+		},
+		"total": 16,
+		"perTask": 0.4
+	},
+	"latencyMs": {
+		"p50": 1568,
+		"p95": 2939
+	},
+	"costUsd": {
+		"total": 0.009095,
+		"per1k": 0.2274
+	},
+	"refusals": 0,
+	"notes": "cli"
+}

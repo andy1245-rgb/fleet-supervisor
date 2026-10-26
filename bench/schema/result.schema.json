@@ -1,0 +1,51 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "DecisionModelBenchRecord",
+	"description": "One committed measurement of a decision model against a fixed task set. The empirical history lives in bench/results.",
+	"type": "object",
+	"required": ["recordedAt", "model", "taskSetSha", "n", "ops", "regret", "latencyMs", "refusals"],
+	"properties": {
+		"recordedAt": { "type": "string" },
+		"model": { "type": "string" },
+		"taskSetSha": { "type": "string", "description": "sha256 of the task file, so records are comparable only against the same labels" },
+		"n": { "type": "integer" },
+		"ops": {
+			"type": "object",
+			"description": "Strict exact-match accuracy over the four ops, plus per-op recall.",
+			"required": ["exactMatch"],
+			"properties": {
+				"exactMatch": { "type": "number" },
+				"perOpRecall": { "type": "object", "additionalProperties": { "type": "number" } }
+			}
+		},
+		"selective": {
+			"type": "object",
+			"description": "Accuracy if decisions below a confidence threshold are escalated. This is the number the ladder actually depends on.",
+			"properties": {
+				"coverageAtThreshold": { "type": "object", "additionalProperties": { "type": "number" } },
+				"accuracyAtCoverage": { "type": "object", "additionalProperties": { "type": "number" } }
+			}
+		},
+		"regret": {
+			"type": "object",
+			"description": "Cost-weighted score. Weights are graded by consequence, not by disagreement: leaving a stalled agent alone is the expensive mistake, escalating is merely wasteful.",
+			"required": ["total", "perTask"],
+			"properties": {
+				"weights": { "type": "object", "additionalProperties": { "type": "number" } },
+				"total": { "type": "number" },
+				"perTask": { "type": "number" }
+			}
+		},
+		"latencyMs": {
+			"type": "object",
+			"required": ["p50", "p95"],
+			"properties": { "p50": { "type": "number" }, "p95": { "type": "number" } }
+		},
+		"costUsd": {
+			"type": "object",
+			"properties": { "total": { "type": "number" }, "per1k": { "type": "number" } }
+		},
+		"refusals": { "type": "integer", "description": "Decisions where the model declined to pick an op. Not an error: a correct refusal routes to the escalator." },
+		"notes": { "type": "string" }
+	}
+}
