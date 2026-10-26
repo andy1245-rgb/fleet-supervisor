@@ -1,0 +1,10 @@
+{
+	"name": "pi-fleet",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"description": "Writes this pi session's own claim file (~/.pi/agent/fleet/<pane>.json) for the agentFleet supervisor to read",
+	"pi": {
+		"extensions": ["./index.ts"]
+	}
+}
