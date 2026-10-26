@@ -259,8 +259,7 @@ export function buildBrief(
 
 // ------------------------------------------------------------------ the model
 
-const CHEAP_TASK = `=== inspector task ===
-Diagnose what is actually wrong with this group of agents, then recommend one action.
+const CHEAP_TASK = `Diagnose what is actually wrong with this group of agents, then recommend one action.
 Step repetition is the largest known multi-agent failure mode: several turns
 reporting the same phase and the same last action means the agent is repeating a
 step, not making progress. Say which step is repeating and what it is probably
@@ -295,10 +294,9 @@ function deepPrompt(trigger: Trigger, brief: string): string {
 	].join("\n");
 }
 
-/** The structured request for one cheap inspection. The brief rides in
- *  `acceptance` on purpose: the OpenRouter adapter clips `tail` to
- *  MAX_TAIL_CHARS (decision/prompt.ts) and the brief is deliberately larger than
- *  that, so it goes in the one free-text field that is not clipped. */
+/** The structured request for one cheap inspection. The brief rides in its own
+ *  `brief` field, which prompt.ts renders as an unclipped `brief:` section — it is
+ *  larger than MAX_TAIL_CHARS by design, and the tail is omitted for that call. */
 function cheapInput(trigger: Trigger, brief: string, ctx: InspectContext): DecisionInput {
 	const named = trigger.paneIds
 		.map((paneId) => ctx.agents.find((agent) => agent.paneId === paneId))
@@ -315,7 +313,7 @@ function cheapInput(trigger: Trigger, brief: string, ctx: InspectContext): Decis
 		last: claim?.last ?? "",
 		idleTicks: 0,
 		tail: "",
-		acceptance: `${brief}\n\n${CHEAP_TASK}`,
+		brief: `${brief}\n\n${CHEAP_TASK}`,
 	};
 }
 

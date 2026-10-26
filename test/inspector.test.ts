@@ -285,7 +285,7 @@ test("a decision-shaped answer never invents a target on a multi-pane trigger", 
 	assert.equal(finding.proposed, undefined);
 });
 
-test("the brief reaches the model in the field the adapter does not clip", async () => {
+test("the brief reaches the model in its own field, not in acceptance", async () => {
 	const fake = fakeModel(answer());
 
 	await inspect(COLLISION, context(fake.model));
@@ -293,9 +293,11 @@ test("the brief reaches the model in the field the adapter does not clip", async
 	const input = fake.inputs[0];
 	assert.ok(input !== undefined, "the model was called once");
 	assert.equal(fake.inputs.length, 1);
-	assert.match(input.acceptance ?? "", /--- pane p1 \(named by the trigger\) ---/);
-	assert.match(input.acceptance ?? "", /=== inspector task ===/);
-	assert.equal(input.tail, "", "the adapter clips tail to 700 chars, so the brief cannot live there");
+	assert.match(input.brief ?? "", /--- pane p1 \(named by the trigger\) ---/);
+	assert.match(input.brief ?? "", /--- pane p2 \(named by the trigger\) ---/);
+	assert.match(input.brief ?? "", /Diagnose what is actually wrong with this group of agents/);
+	assert.equal(input.acceptance, undefined, "an inspection is not a decision with huge acceptance text");
+	assert.equal(input.tail, "", "the brief already carries the tails, so the tail field stays empty");
 });
 
 test("a model outage is a finding, not a failed tick", async () => {

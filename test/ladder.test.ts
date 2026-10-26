@@ -62,6 +62,7 @@ test("a confident, actionable primary decision is not escalated", async () => {
 	);
 
 	assert.equal(result.escalated, false);
+	assert.equal(result.escalationFailed, undefined, "no escalation was attempted, so nothing failed");
 	assert.equal(result.trail.length, 1);
 	assert.equal(result.decision, primaryReply);
 	assert.equal(result.decision.op, "nudge");
@@ -90,6 +91,7 @@ test("confidence below the threshold consults the escalator", async () => {
 	);
 
 	assert.equal(result.escalated, true);
+	assert.equal(result.escalationFailed, false, "a successful escalation is not a failed one");
 	assert.equal(result.trail.length, 2);
 	assert.deepEqual(result.trail, [primaryReply, escalatorReply]);
 	assert.equal(result.decision, escalatorReply);
@@ -123,10 +125,26 @@ test("an escalator that throws falls back to the primary and does not throw", as
 	assert.equal(result.decision.argument, "rerun with --check (escalation failed: model timed out)");
 	assert.equal(result.decision.confidence, 0.2);
 	assert.equal(result.decision.raw, '{"op":"nudge"}');
-	assert.equal(result.escalated, false);
-	assert.equal(result.trail.length, 1);
+	assert.equal(result.trail.length, 1, "an escalator that threw was never consulted");
 	assert.notEqual(result.decision, primaryReply);
 	assert.equal(primaryReply.argument, "rerun with --check");
+});
+
+test("a failed escalation is reported as an escalation, and as a failed one", async () => {
+	const primaryReply = decision({ op: "flag", argument: "unsure which test to run", confidence: 0.1 });
+
+	const result = await decideWithEscalation(
+		INPUT,
+		ladder(fakeModel("primary", { reply: primaryReply }), fakeModel("escalator", { reply: new Error("OPENROUTER_API_KEY is not set") })),
+	);
+
+	// The number that exists to reveal "the primary could not handle this" must not
+	// go silent precisely when the escalator is down.
+	assert.equal(result.escalated, true);
+	assert.equal(result.escalationFailed, true);
+	assert.equal(result.decision.op, "flag", "the primary's op is preserved across the outage");
+	assert.match(result.decision.argument, /^unsure which test to run \(escalation failed: OPENROUTER_API_KEY is not set\)$/);
+	assert.deepEqual(result.trail, [primaryReply], "the trail records what was consulted: the primary alone");
 });
 
 test("an escalator that refuses returns the primary's decision", async () => {
@@ -157,7 +175,8 @@ test("a refused primary plus a throwing escalator still returns the primary", as
 
 	assert.equal(result.decision.op, "flag");
 	assert.equal(result.decision.argument, "needle said no (escalation failed: connection refused)");
-	assert.equal(result.escalated, false);
+	assert.equal(result.escalated, true);
+	assert.equal(result.escalationFailed, true);
 	assert.equal(result.trail.length, 1);
 });
 

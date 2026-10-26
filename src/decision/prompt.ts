@@ -16,7 +16,15 @@ Reply with a single JSON object and nothing else:
 Judge only from the fields given. If the evidence is insufficient to choose an
 action, use flag. Never invent file names or facts not present in the input.`;
 
-/** Field-per-line so a small model can ground on individual values. */
+/** Field-per-line so a small model can ground on individual values.
+ *
+ *  `brief` is the inspector's assembled evidence (see manager/inspector.ts): one
+ *  block per pane, already bounded by BRIEF_BUDGET rather than by MAX_TAIL_CHARS.
+ *  Rule while `brief` is present: it is the dominant content — rendered whole, as
+ *  its own `brief:` section, never clipped — and the terminal tail is omitted,
+ *  because the brief already carries the tails it kept and one prompt may not
+ *  send the same transcript twice. Without `brief` the output is exactly what it
+ *  was before the field existed: fields, then the clipped tail. */
 export function renderInput(input: DecisionInput): string {
 	const lines = [
 		`pane: ${input.paneId}`,
@@ -28,6 +36,7 @@ export function renderInput(input: DecisionInput): string {
 	];
 	if (input.acceptance) lines.push(`acceptance: ${input.acceptance}`);
 	lines.push(`claimed state: ${input.claimState}`, `last completed: ${input.last}`, `idle ticks: ${input.idleTicks}`);
+	if (input.brief) return [...lines, "brief:", input.brief].join("\n");
 	lines.push("terminal tail:", input.tail ? clipTail(input.tail) : "(empty)");
 	return lines.join("\n");
 }

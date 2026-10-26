@@ -21,6 +21,10 @@ export interface DecisionInput {
 	idleTicks: number;
 	/** Last lines of terminal output, padding stripped. */
 	tail: string;
+	/** Assembled evidence for the tier-2 inspector: one block per pane, already
+	 *  bounded by the inspector's own budget. Its own field because it is not a
+	 *  decision's acceptance criteria and is deliberately larger than a tail. */
+	brief?: string;
 }
 
 export interface Decision {

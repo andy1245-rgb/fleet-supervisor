@@ -39,6 +39,10 @@ export interface TickReport {
 	/** Actions parked for the operator instead of performed. */
 	asks: number;
 	escalated: number;
+	/** Escalations attempted where the escalator itself failed. The primary was
+	 *  still found insufficient, so these are a subset of `escalated`, counted
+	 *  separately because an escalator outage is a fact about the supervisor. */
+	escalationFailed: number;
 	costUsd: number;
 	dry: boolean;
 }
@@ -444,7 +448,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const cooldowns = readJson<Record<string, number>>(config.cooldownsPath, {});
 	const built = deps.models ? { ...deps.models, degraded: undefined } : buildLadderModels(config);
 	const { primary, escalator, degraded } = built;
-	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, costUsd: 0, dry: config.dry };
+	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry };
 	const pending = pendingAsks(readAskLog(config.asksPath));
 
 	if (degraded) await notifier.send(degraded, "alert");
@@ -467,6 +471,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		report.decisions.push(entry.result.decision);
 		report.costUsd += entry.result.trail.reduce((sum, d) => sum + d.costUsd, 0);
 		if (entry.result.escalated) report.escalated += 1;
+		if (entry.result.escalationFailed === true) report.escalationFailed += 1;
 
 		const decision = entry.result.decision;
 		const group = groupOf(entry.move.agent, entry.claim);
@@ -497,7 +502,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		};
 
 		if (decision.op === "leave") {
-			appendEvent(config, { kind: "decision", paneId: entry.move.paneId, group, decision: describeDecision(decision), escalated: entry.result.escalated });
+			appendEvent(config, { kind: "decision", paneId: entry.move.paneId, group, decision: describeDecision(decision), escalated: entry.result.escalated, escalationFailed: entry.result.escalationFailed === true });
 			continue;
 		}
 
@@ -664,6 +669,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		moved: report.moved,
 		decisions: report.decisions.length,
 		escalated: report.escalated,
+		escalationFailed: report.escalationFailed,
 		prompts: report.promptsSent,
 		asks: report.asks,
 		costUsd: Number(report.costUsd.toFixed(6)),
@@ -682,7 +688,7 @@ async function main(): Promise<void> {
 		try {
 			const report = await tick({ port, notifier, config });
 			console.error(
-				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dry ? " (dry)" : ""}`,
+				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dry ? " (dry)" : ""}`,
 			);
 		} catch (e) {
 			const message = `fleet tick failed: ${(e as Error).message}`;
