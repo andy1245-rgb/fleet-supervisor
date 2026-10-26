@@ -28,6 +28,27 @@ export function renderInput(input: DecisionInput): string {
 	];
 	if (input.acceptance) lines.push(`acceptance: ${input.acceptance}`);
 	lines.push(`claimed state: ${input.claimState}`, `last completed: ${input.last}`, `idle ticks: ${input.idleTicks}`);
-	lines.push("terminal tail:", input.tail || "(empty)");
+	lines.push("terminal tail:", input.tail ? clipTail(input.tail) : "(empty)");
 	return lines.join("\n");
+}
+
+/** Characters of terminal output a decision may see. The tail is the only field
+ *  with no natural bound; every other field is one line. Beyond this the value is
+ *  cut from the front and marked, so the reader knows the evidence is partial.
+ *
+ *  Derivation: the engine has a 1024-token window and a 401-token static prefix,
+ *  so max_new_tokens=96 leaves 527 tokens (~2000 chars at 3.8 chars/token) for the
+ *  whole prompt — not for the tail alone. Measured fixed cost: SYSTEM 709 chars,
+ *  the one-line field block 370 chars (max 420 over the corpus), ~2 for the
+ *  separator. 2000 - 709 - 370 - 2 leaves ~900; 700 keeps the ~30-char truncation
+ *  marker inside the budget with margin. Prefill also cost ~1.6ms/char here, so the
+ *  shorter budget is the faster one. */
+export const MAX_TAIL_CHARS = 700;
+
+/** Keep the end of the output: what the agent did last is the evidence, not how
+ *  its first lines were echoed back. */
+export function clipTail(tail: string): string {
+	if (tail.length <= MAX_TAIL_CHARS) return tail;
+	const kept = tail.slice(tail.length - MAX_TAIL_CHARS);
+	return `[...truncated ${tail.length - kept.length} chars...]\n${kept}`;
 }

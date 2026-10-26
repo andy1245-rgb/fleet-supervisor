@@ -15,28 +15,53 @@ import time
 
 os.environ.setdefault("NEEDLE_TELEMETRY", "0")
 
+# One decode per decision, and 96 generated tokens rather than the stock 512.
+# Both numbers come from the engine's 1024-token sliding window and the 401-token
+# static prefix that needle_init() builds from the system text and the four tool
+# schemas: at max_new_tokens=512 the input budget is 1024 - 401 - 512 = 111 tokens
+# (~421 chars), which no real fleet tail fits, so the engine degenerates into a
+# self-repeating reasoning block until the adapter's 30s timeout fires. At 96 the
+# input budget is 527 tokens (~2000 chars).
+#
+# Decode once, not via run(): run() is a tool-execution loop, and even at
+# max_steps=1 it re-decodes after executing the tool and returns *that* second
+# decode. Our tools record nothing, so the loop only ever fed meaningless results
+# back into the window and doubled the cost of every decision.
+MAX_NEW_TOKENS = 96
+
 
 def main() -> None:
     import needle
 
+    # The sidecar reads the call, it never acts on it, but a tool that returns None
+    # hands the engine a null result; a sentinel is what a caller raising max_steps
+    # would need to feed back.
     @needle.tool
     def leave(reason: str):
         "Agent is on track, no action needed. argument: short reason."
+        return {"ok": True}
 
     @needle.tool
     def nudge(message: str):
         "Agent stopped before finishing. argument: the instruction to send it."
+        return {"ok": True}
 
     @needle.tool
     def declare_done(summary: str):
         "Agent met its acceptance criteria. argument: what was delivered."
+        return {"ok": True}
 
     @needle.tool
     def flag(problem: str):
         "Needs a human or a stronger model. argument: the problem."
+        return {"ok": True}
 
     tools = [leave, nudge, declare_done, flag]
-    agent = needle.Needle(tools=tools)
+    # stateless=True makes every complete() start with reset(): without it decision N
+    # is decoded conditioned on the unrelated panes of decisions 1..N-1, and the
+    # shared conversation grows the prefix until it re-starves the 1024-token window
+    # (the failure above, reached slowly). One request, one reset, no carry-over.
+    agent = needle.Needle(tools=tools, stateless=True)
     sys.stderr.write("needle: ready\n")
     sys.stderr.flush()
 
@@ -54,7 +79,8 @@ def main() -> None:
         text = f"{req.get('system', '')}\n\n{req.get('user', '')}"
         started = time.time()
         try:
-            out = agent.run(text)
+            agent.reset()
+            out = agent.complete(text, max_new_tokens=MAX_NEW_TOKENS)
         except Exception as exc:  # engine faults must not kill the sidecar
             sys.stdout.write(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}) + "\n")
             sys.stdout.flush()

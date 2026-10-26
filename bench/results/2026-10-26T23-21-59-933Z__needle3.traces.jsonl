@@ -1,0 +1,3 @@
+{"id":"dp-0164-01a15f32","expectedOp":"flag","predictedOp":"flag","confidence":0.4298,"refused":true,"latencyMs":20256,"costUsd":0,"model":"needle3","argument":"needle declined to call a tool"}
+{"id":"dp-0368-01a14237","expectedOp":"nudge","predictedOp":"flag","confidence":0,"refused":true,"latencyMs":30002,"costUsd":0,"model":"needle3","argument":"model returned no JSON object"}
+{"id":"dp-0483-01a14da7","expectedOp":"leave","predictedOp":"flag","confidence":0,"refused":true,"latencyMs":30009,"costUsd":0,"model":"needle3","argument":"model returned no JSON object"}

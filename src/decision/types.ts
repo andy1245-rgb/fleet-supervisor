@@ -41,6 +41,10 @@ export interface DecisionModel {
 	readonly name: string;
 	readonly costPerCallUsd: number;
 	decide(input: DecisionInput): Promise<Decision>;
+	/** Releases anything the adapter keeps alive out of band — the needle adapter's
+	 *  resident python sidecar. Optional: a stateless HTTP adapter and a test fake
+	 *  have nothing to release, and a caller must not have to know which is which. */
+	close?(): void;
 }
 
 /** Shared defensive parse: every adapter returns model output that may be
