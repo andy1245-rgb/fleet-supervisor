@@ -46,6 +46,14 @@
 			"properties": { "total": { "type": "number" }, "per1k": { "type": "number" } }
 		},
 		"refusals": { "type": "integer", "description": "Decisions where the model declined to pick an op. Not an error: a correct refusal routes to the escalator." },
+		"coverage": {
+			"type": "object",
+			"description": "Row counts behind each per-op number: the sampled subset versus the whole corpus. A recall over 7 rows is not the same claim as a recall over 200.",
+			"properties": {
+				"sampledPerOp": { "type": "object", "additionalProperties": { "type": "integer" } },
+				"corpusPerOp": { "type": "object", "additionalProperties": { "type": "integer" } }
+			}
+		},
 		"notes": { "type": "string" }
 	}
 }
