@@ -1,0 +1,60 @@
+{
+	"recordedAt": "2026-10-26T23:24:18.841Z",
+	"model": "slate-control-d8",
+	"taskSetSha": "b9765d1a55e18b4e",
+	"n": 40,
+	"ops": {
+		"exactMatch": 0.15,
+		"perOpRecall": {
+			"nudge": 0,
+			"flag": 0.8571,
+			"leave": 0
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"weights": {
+			"leave": 5,
+			"declare_done": 4,
+			"flag": 2,
+			"nudge": 1
+		},
+		"total": 46,
+		"perTask": 1.15
+	},
+	"latencyMs": {
+		"p50": 994,
+		"p95": 1210
+	},
+	"costUsd": {
+		"total": 0,
+		"per1k": 0
+	},
+	"refusals": 37,
+	"coverage": {
+		"sampledPerOp": {
+			"nudge": 26,
+			"flag": 7,
+			"leave": 7
+		},
+		"corpusPerOp": {
+			"flag": 89,
+			"nudge": 406,
+			"leave": 7
+		}
+	},
+	"notes": "slate control-d8: layers 8, labels leave|nudge|declare_done|flag, control (untuned base, no adapter), engine 40.4s wall, python bridge finetune/slate_bridge.py"
+}

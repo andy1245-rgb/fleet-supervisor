@@ -32,7 +32,19 @@ LIMIT    ?= 0
 
 BASE_ARCHIVE = $(shell $(PY) -c "from needle.agent import fetch; print(fetch.cache_dir(3) + '/' + fetch.base_weights(3))" 2>/dev/null)
 
-.PHONY: help deps tools data dry train build eval all smoke typecheck clean
+.PHONY: help deps tools data dry train build eval all smoke typecheck clean slate slate-probe slate-status
+
+# --- slate: several variants trained and exported together -------------------
+# slate.json is the source of truth for what a variant is: its depth and its
+# label scope. One variant = prepare -> finetune -> merge + slice
+# (`needle build --lora ... --layers N`) -> out/<id>/<id>.cact. The probe pays
+# for one epoch of the first variant first, so a slate that cannot fit the
+# wall clock is abandoned after one epoch instead of after twelve.
+SLATE_IDS    := $(shell $(PY) slate.py list 2>/dev/null)
+SLATE        := $(PY) -u slate.py
+SLATE_EPOCHS ?= 12
+MAX_EPOCH_S  ?= 600
+PROBE_ID     ?= $(firstword $(SLATE_IDS))
 
 help:
 	@echo "make deps      install the training extra into $(VENV) (jax, flax, optax, sentencepiece)"
@@ -44,6 +56,9 @@ help:
 	@echo "make eval      score $(CACT) on $(VAL): refusals, per-class accuracy, calibration"
 	@echo "make smoke     score the published base archive on the dry split, no training"
 	@echo "make all       train build eval"
+	@echo "make slate     every variant in slate.json: train -> merge -> build --layers N -> out/<id>/<id>.cact"
+	@echo "make slate-probe  time one epoch of $(PROBE_ID) before paying for the whole slate"
+	@echo "make slate-status rows, adapter and archive per variant"
 
 deps:
 	$(UV) pip install --python $(PY) "cactus-needle[train]"
@@ -88,6 +103,23 @@ dry: $(TOOLS)
 smoke: $(TOOLS) dry
 	$(PY) eval.py --weights $(BASE_ARCHIVE) --val $(OUT)/dry/val.jsonl \
 		$$(test $(LIMIT) -gt 0 && echo --limit $(LIMIT)) --report $(OUT)/smoke.json
+
+# Each variant runs its own three steps, in order, through slate.py: the data
+# filter, `needle finetune`, then `needle build --lora --layers N` (merge, slice,
+# export). A variant whose label set was already trained reuses that adapter —
+# LoRA trains the full 20-layer base, so only the export differs by depth.
+slate: $(TRAIN) $(VAL)
+	@for id in $(SLATE_IDS); do \
+		$(SLATE) run --variant $$id --epochs $(SLATE_EPOCHS) || exit 1; \
+	done
+	@echo "  slate     archives:"
+	@ls -l out/*/*.cact 2>/dev/null || echo "  slate     no .cact was written; see the failure above"
+
+slate-probe: $(TRAIN) $(VAL)
+	$(SLATE) probe --variant $(PROBE_ID) --max-epoch-seconds $(MAX_EPOCH_S)
+
+slate-status:
+	$(SLATE) status
 
 typecheck:
 	$(TSC) --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride \

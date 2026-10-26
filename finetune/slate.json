@@ -1,0 +1,60 @@
+{
+	"$comment": "Data-driven slate definitions. One LoRA fine-tune on the 20-layer base serves every depth: needle build --lora merges the adapter and then slices the rung, so `layers` here is an export-time number, not a training one (needle/model/finetune.py:293 `rung`, model/build.py). `labels` is the variant's class scope: it filters both the rows (answers[0].name) and the tool catalogue the rows carry, so a 3-class variant is trained against a 3-tool grammar rather than told about a class it cannot emit.",
+	"variants": [
+		{
+			"id": "d4",
+			"layers": 4,
+			"labels": [
+				"leave",
+				"nudge",
+				"declare_done",
+				"flag"
+			],
+			"description": "Smallest rung, full 4-op label set. The latency play: 4 of 20 layers, expected to be the fastest archive on disk and the one most likely to trade per-op recall for speed."
+		},
+		{
+			"id": "d8",
+			"layers": 8,
+			"labels": [
+				"leave",
+				"nudge",
+				"declare_done",
+				"flag"
+			],
+			"description": "Middle rung, full 4-op label set. The rung finetune/Makefile ships by default (LAYERS=8), so this is the variant production would run."
+		},
+		{
+			"id": "d20",
+			"layers": 20,
+			"labels": [
+				"leave",
+				"nudge",
+				"declare_done",
+				"flag"
+			],
+			"description": "Full-depth rung, no slicing: the accuracy play and the upper bound for the two smaller depths, at ~5x the weights to load and quantise."
+		},
+		{
+			"id": "triage",
+			"layers": 8,
+			"labels": [
+				"leave",
+				"nudge",
+				"flag"
+			],
+			"description": "Scope variant: triage only (leave vs nudge vs flag), trained and decoded against a 3-tool catalogue. declare_done is out of scope because the mined corpus has zero targets for it (mine/decision-points.ts labels never map to it), so the class cannot be learned from this data and only widens the grammar."
+		},
+		{
+			"id": "control-d8",
+			"layers": 8,
+			"labels": [
+				"leave",
+				"nudge",
+				"declare_done",
+				"flag"
+			],
+			"train": false,
+			"description": "Control, not a fine-tune: the published base checkpoint sliced to 8 layers with no adapter. It costs one `needle build` instead of an epoch, and it is the row that says what the fine-tune would have had to beat \u2014 the zero-shot baseline at the shipped depth."
+		}
+	]
+}
