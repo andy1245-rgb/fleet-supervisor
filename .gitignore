@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Python: the needle sidecar venv
+.venv/
+__pycache__/
+*.pyc
+
+# Miner output — regenerable from ~/.pi/agent/sessions
+mine/out/
+
+# Scratch files from ticks and benchmark runs
+bench/results/*.tmp
+*.tmp
+
+# Engine and model caches live outside the repo (~/.cache/cactus-needle,
+# ~/.cache/huggingface); nothing from them is ever staged.
+.cache/
+finetune/checkpoints/
+
+# Generated fine-tune artifacts (`make data/train/build`); bench/results and
+# bench/tasks are NOT ignored — those are the empirical history.
+finetune/out/

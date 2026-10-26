@@ -1,0 +1,19 @@
+{
+	"name": "agentfleet",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"description": "Supervisor for a fleet of live agent panes: change detection, decision models, escalation, watchdog, benchmark",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "node --test test/*.test.ts",
+		"mine": "node mine/decision-points.ts",
+		"bench": "node bench/runners/run.ts",
+		"tick": "node src/manager/tick.ts",
+		"watchdog": "node src/watchdog/rules.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.0",
+		"typescript": "^5.7.2"
+	}
+}
