@@ -135,3 +135,105 @@ Two further reasons the projections above are floors rather than estimates:
 - **Nothing was exported**, so there is no `.cact` from this work on either machine: `C:/Users/andre/agentFleet-train/out/` is empty, `finetune/out/slate/d4/` still holds only `data.json`, `train.jsonl` and `val.jsonl`, and `finetune/out/control-d8/control-d8.cact` remains the only archive in `finetune/out/`. The slate is still 0 of 4 fine-tuned variants, unchanged from the status above.
 
 The remote workspace is left in place at `C:/Users/andre/agentFleet-train/` (venv, `data/` with the two splits, `tools.py`, the base checkpoint, `measure.py`, and `logs/d321-{1024,768,512,256}.json` with the raw trainer logs beside them). No process was left running; `Get-Process python` is empty and the box sits at 3-9% CPU.
+
+---
+
+# 2026-10-27 — trained slate: `d4` (this machine) and `d8` (dell321)
+
+Hand-appended after the generated report above; `bench/runners/slate.ts` does not know about this run, and re-running it would overwrite this section.
+
+Both variants were trained to completion and exported. The short version: **the archives exist, the measurement is real, and the fine-tune is not usable at any depth I measured** — best overall accuracy is 28% (`d4`) against 26% for its own untrained control, and the 8-layer tune turns 92% refusals into 82% wrong answers. `declare_done`, which has zero training rows, is the fine-tune's modal answer. Details and the numbers behind that sentence are below.
+
+## The data this trained on, and what moved underneath it
+
+| | |
+|---|---|
+| rows | `out/slate/{d4,d8}/train.jsonl`, **452** rows, sha `bc65ec827cf83feb` (identical for both) |
+| per-op | `nudge` 366, `flag` 79, `leave` 7, `declare_done` **0** |
+| val | `out/slate/{d4,d8}/val.jsonl`, **50** rows, sha `d6fb9ffd348b90c4` (`nudge` 40, `flag` 10) |
+| tools | 665 chars, the same four schemas the decode grammar compiles from |
+| window | `seq_len 640` (cap 640), prompt min 403 / mean 447.0 / max 573, row total max **641** |
+| dead masks | **0/452** rows carry an all-zero mask at 640 — re-verified on the rebuilt rows, as the prompt-compaction run warned it must be |
+
+The rebuild the compaction run asked for was done first, and it was necessary: `out/slate/*` still held the **old** SYSTEM in all 452 rows. Rebuilt through the Makefile (`make tools`, `node dataset.ts`) and `slate.py`'s own `prepare()`, then verified by grep:
+
+- `"supervise one unattended coding agent. Pick exactly one action"` — **452/452** rows (new)
+- `"supervise one coding agent working unattended"` — **0** rows (old)
+- `"Reply with a single JSON object"` — **0** rows (old phrasing)
+
+**A concurrent session rebuilt the corpus while this run was training.** `mine/out/decision-points.jsonl` was regenerated at 22:09 and `finetune/out/train.jsonl` at 22:12 (local), and commits `2826e04` ("the evidence that the learning half is unsound") and `d90a486` ("rebuild the label vocabulary on evidence") landed mid-run. The rebuilt split is now **3 train rows / 1 val row** (`nudge` 2, `leave` 1). The slate rows this run trained on are the pre-change snapshot preserved at `out/slate/d4/` and `out/slate/d8/` (sha cited above); `out/train.jsonl` no longer matches them, so re-running `slate.py` today would prepare 3-row variants. Nothing was rebuilt a second time: the training in flight already held the 452-row snapshot, and 3 rows is not a trainable corpus.
+
+## Training cost actually paid versus the 30.6 min projection
+
+Both runs: `--epochs 3 --batch-size 16 --lr 1e-4 --max-len 640 --val-split 0.1 --seed 0 --lora-rank 16 --lora-alpha 32`, 26 steps/epoch, 78 steps total, 45-row internal holdout, an adapter written after **every** epoch.
+
+| variant | host | epoch 1 (incl. compile) | epoch 2 | epoch 3 | total | steady s/epoch | vs 30.6 projection |
+|---|---|---|---|---|---|---|---|
+| `d4` | this machine (12 threads) | 1822.2 s = **30.4 min** | 1711.0 s = **28.5 min** | 1681.0 s = **28.0 min** | 5214.2 s = 86.9 min | 28.5 min | **1.07× better** |
+| `d8` | dell321 (8 threads) | 2814.1 s = **46.9 min** | 2701.7 s = **45.0 min** | 2698.3 s = **45.0 min** | 8214.1 s = 136.9 min | 45.0 min | **1.47× worse** |
+
+Measured step cost: **64.6 s/step** here, **103.9 s/step** on dell321 — **1.61×**, not the 1.02× the machine swap was recorded at. dell321 is 8 logical processors against 12 here and its JAX 0.10.2 (Windows) averaged 2.6 cores of work; the local JAX 0.12.0.1 held ~6.4. The 1.02× parity does not survive `--max-len 640` on these two builds.
+
+Loss curves, per epoch (`val` is the trainer's own 45-row holdout, not the 50-row split the eval scores):
+
+| variant | epoch 1 | epoch 2 | epoch 3 |
+|---|---|---|---|
+| `d4` | loss 0.9112 / val 0.8106 | loss 0.6859 / val 0.7402 | loss 0.6613 / **val 0.7241** |
+| `d8` | loss 0.9079 / val 0.8122 | loss 0.6868 / val 0.7366 | loss 0.6571 / **val 0.7243** |
+
+The two adapters are the same tune: comparing all 10 adapter tensors, the largest difference is **6.9e-3** (2.2% of the largest weight, 3.1e-1), i.e. float non-determinism across core counts, not a different fit. **So every difference between the `d4` and `d8` rows below is the export depth, not the training.**
+
+## Comparison — 50-row held-out split, `train`-exact tools, `max_new_tokens` 96
+
+One run per archive. `control-d4` and `control-d8` are the published base sliced to the same depth with no adapter (the `d20` row is a diagnostic: `d4`'s adapter exported at full depth, built to tell "depth broke it" from "the tune did nothing").
+
+| archive | layers | adapter | exact | answered | refusals | nudge recall | flag recall | `declare_done` predicted | p50 | ECE |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `control-d4` | 4 | none | 26.0% | 41/50 | 9 (18.0%) | 27.5% (11/40) | 20.0% (2/10) | 12 | 226 ms | 0.167 |
+| **`d4`** | 4 | tuned | **28.0%** | 45/50 | 5 (10.0%) | **32.5%** (13/40) | 10.0% (1/10) | 19 | **206 ms** | n/a |
+| `control-d8` | 8 | none | 0.0% | 4/50 | 46 (92.0%) | 0.0% | 0.0% | 0 | 340 ms | 0.069 |
+| **`d8`** | 8 | tuned | **6.0%** | 41/50 | 9 (18.0%) | 7.5% (3/40) | 0.0% | **30** | 320 ms | n/a |
+| `d20` | 20 | tuned | 10.0% | 26/50 | 24 (48.0%) | 10.0% (4/40) | 10.0% (1/10) | 10 | 1100 ms | n/a |
+
+Confusion, true → predicted (`d4` / `d8`):
+
+- `nudge` (40): `nudge` 13 / 3, `declare_done` 18 / 26, `flag` 4 / 5, `leave` 1 / 1, refused 4 / 5
+- `flag` (10): `nudge` 6 / 2, `flag` 1 / 0, `declare_done` 1 / 4, `leave` 1 / 0, refused 1 / 4
+
+Three things the table says that the summary line does not:
+
+1. **Depth is a cliff, not a slope.** The untuned 8-layer base refuses 46/50 (0% exact); the untuned 4-layer base answers 41/50 and gets 26% by accident. Slicing to 8 produces something that will not commit; slicing to 4 produces something that commits to noise. Tuning the 8-layer rung moves it from "escalate everything" to "answer 41/50 and be wrong 38 times" — a **regression** for a ladder whose refusals route to a stronger model, and the single most important number in this table.
+2. **The tune barely moves accuracy at 4 layers**: +2.0 points overall (26.0% → 28.0%), `nudge` +5.0 (27.5% → 32.5%), `flag` −10.0 (20% → 10%). What it does move is commitment: refusals 9 → 5.
+3. **Full depth does not rescue it** (`d20`: 10.0%), so this is not "the slice was too small" — the adapter itself does not carry the op mapping, while it does carry the argument (the emitted `reasoning`/argument text follows the prompt; the op does not).
+
+## `declare_done` — zero targets, and still the modal answer
+
+`declare_done` has **0** rows in the corpus and stays unlearnable: no variant can recall it, and its precision column is meaningless because there is nothing to recall. That was known. What was not known is that the fine-tune **emits it anyway**: 19/50 decisions at `d4` and **30/50 at `d8`**, against 12/50 and 0/50 for the untuned controls. It is not a class the model learned and not a class it can be scored on; it is where the tuned weights put mass when the grammar offers a fourth tool. `triage` (3-tool scope) is the variant that would have tested whether removing the op from the grammar removes the attractor — it is **not trained**, and the corpus rebuild means it now cannot be trained from this data.
+
+## Confidence calibration
+
+`needle build --lora` **drops the confidence head**, so all three tuned archives report `confidence: None` for every call and their deciles are empty by construction: `d4`, `d8` and `d20` have no calibration number at all. The two controls keep the head and do report one — `control-d4` ECE 0.167 over 50 calls (45 of them in the 0.1-0.2 band, mean confidence 0.138 for 31% accuracy) and `control-d8` ECE 0.069 over 50 calls, but that second number is computed on 46 refusals binned at 0-0.2 and is not evidence of calibration. Any claim that the slate is "calibrated" would need `needle platform finetune` to keep the head.
+
+## What is on disk
+
+| path | bytes | layers | tensors |
+|---|---|---|---|
+| `finetune/out/d4/d4.cact` (and `finetune/out/slate/d4/d4.cact`) | **15,378,708** | 4 | 126 |
+| `finetune/out/d8/d8.cact` (and `finetune/out/slate/d8/d8.cact`) | **27,393,236** | 8 | 238 |
+| `finetune/out/d20/d20.cact` — diagnostic, `d4`'s adapter at full depth | 63,437,076 | 20 | 574 |
+| `finetune/out/control-d4/control-d4.cact` — diagnostic, untuned 4-layer base | 15,390,548 | 4 | 133 |
+| `finetune/out/control-d8/control-d8.cact` — pre-existing control | 27,411,604 | 8 | - |
+
+Adapters: `finetune/out/slate/d4/adapter.safetensors` (7,906,640) and `finetune/out/slate/d8/adapter.safetensors` (7,906,632), plus `ckpt/epoch{1,2,3}.safetensors` per variant. Logs: `finetune/out/slate/{d4,d8}/train.log` (78 step lines each). Raw eval reports: `finetune/out/{d4,d8,d20,control-d4}/eval.json`, `finetune/out/control-d8/eval-slate.json`. `d8` was trained, exported and merged on dell321 (`needle build --lora ... --layers 8`, 27.39 MB) and the `.cact` copied back; `d4` was built here.
+
+## Cloud row
+
+`openrouter:z-ai/glm-5.3-flash` — **not run — no key**. `OPENROUTER_API_KEY` is unset in this workspace and the hosted comparison is the operator's to run; a hand-written row would be a fabrication.
+
+## How this run deviates from the plan, and what bounds it
+
+- **`d8`'s first checkpoint came at 46.9 minutes, past the 40-minute line.** It was not restarted or killed: it was stepping every ~103 s the whole time, so the "no checkpoint in 40 minutes" failure mode was a slow machine, not a dead run. This is the judgment call in the run; a machine that is 1.61× slower per step makes the 40-minute rule fire on a healthy job.
+- **Both trainers' post-training exact-call pass was cut.** `_score_quantised` calls `generate()` per held-out example with `max_new_tokens=96`, and `generate` re-traces for every distinct `buf_len` (499-669 across this split), so 45 examples cost 45 compiles: `d4`'s pass ran 30 minutes without finishing and `d8`'s was stopped the moment its third epoch checkpoint landed. `eval.py` above is the measurement of record; the trainer's own `accuracy … held-out calls exact` line does not exist for either variant.
+- **`finetune/epoch_train.py` is not from the installed package.** `needle finetune` writes its adapter once, after the last epoch, and has no resume flag, so per-epoch durability had to come from somewhere: that file drives the package's own primitives (`fit_max_len`, `load_jsonl`, `init_lora`, `merge_lora`, `cq_ste_params`, `write_adapter`) through the identical loop and schedule and adds the per-epoch `write_adapter`. Equivalence was checked before the real runs: on a 16-row micro set the CLI and this driver print the same losses to four decimals (`0.8169`/`0.8182`, `0.8023`/`0.7995`) and the same `0/4` held-out score. It was swept into commit `5753106` by the concurrent session, not committed by this one.
+- **One run each.** With 50 val rows a single row is 2 points, and the earlier control-d8 measurement recorded run-to-run wobble of 37-40 refusals of 40 on the bench set. The 28% vs 26% gap between `d4` and its control is roughly one row; the `d8` collapse (30 `declare_done`) and the refusal swing (46 → 9) are far outside that wobble and are the findings worth acting on.
+- `leave` has **7** corpus rows and **0** val rows: its recall column is unmeasurable here, in both directions.
