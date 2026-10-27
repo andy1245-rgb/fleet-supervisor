@@ -6,6 +6,56 @@
 // A turn is the run of assistant/toolResult records between two user records.
 // Synthetic user records (harness notifications, skill injections, empty
 // payloads) are not human answers, so they neither end a turn nor label one.
+//
+// THIS CORPUS IS A PROXY, NOT OBSERVED FLEET STATE. Two of a decision input's
+// fields are reconstructed downstream (bench/tasks/from-captures.ts): `status` is
+// assumed `idle` because a human spoke, and `phase` is inferred from tool names.
+// Nothing here was read off a pane. Treat a row as "this turn, then this human
+// message", never as "the fleet was in this state".
+//
+// TWO OPS ARE STRUCTURALLY UNMINEABLE FROM TRANSCRIPTS, and that is a property of
+// the population, not a gap to be filled with a weak predicate. A row exists only
+// because a human spoke, so P(a human intervened) = 1 for every row:
+//   leave         the correct answer "nothing was owed" has no human message, so
+//                 it cannot appear here at all. The only `leave` rows are the
+//                 `stop` ones (a human intervened in order to halt), which is a
+//                 different event from a supervisor staying quiet.
+//   declare_done  a human's next message is evidence of what they had to do, never
+//                 of a delivery they accepted. No label produces this op.
+//
+// The label vocabulary is `continue | instruction | redirect | question | stop`,
+// and each label is emitted for a named piece of evidence in the human's text:
+//   continue     nothing in the message but an acknowledgement, so the human
+//                added no content the agent lacked.
+//   instruction  the human told the agent something: a directive ("make sure...",
+//                "let's...", "i want...") or a statement carrying content. This is
+//                what a supervisor should have typed instead of waiting.
+//   redirect     the human corrected the course the agent was on ("actually",
+//                "instead", "oops", "i meant").
+//   question     the human asked the agent something rather than telling it.
+//   stop         the message is *only* a halt ("cancel", "never mind").
+// A message with no words at all (".", ",") carries no evidence either way and is
+// dropped rather than labelled.
+//
+// There is no `new_task`. Both signals a transcript can actually test for an
+// abandoned thread were measured over the 569 human-answered turns in these 117
+// sessions, and neither finds one. Explicit abandonment phrasing ("forget it",
+// "never mind", "drop this", "leave it", "not that") appears exactly once, and in
+// that message "leave it as is" is a continuation. A path, filename or directory
+// that appears nowhere earlier in the session matches 34; read one by one they are
+// either tokeniser artefacts (prose slashes like `paused/corrupted`, a bare URL, a
+// slash command) or ordinary instructions naming a file or folder inside the work
+// in progress — always the same agent, on the same task, which is the population
+// `new_task` was supposed to be the opposite of. The third signal, "a question that
+// is not about the work in progress", needs a topic model this repo does not have,
+// so it is not implemented rather than approximated.
+//
+// The bucket that used to stand in for all three was `text.length > 200`, and 10 of
+// 10 sampled rows from it were instructions to the same agent on the same task — so
+// `new_task → flag` was teaching the opposite of what it claimed, and it was the
+// entire `flag` class. A missing label is honest; that one poisoned every
+// downstream target. `flag` now has no mined support at all, which is the true state
+// of the evidence (see src/labeling/label-to-op.ts).
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -30,16 +80,45 @@ export interface DecisionPoint {
 	labelReason: string;
 }
 
-const LABELS: readonly Label[] = ["continue", "nudge", "redirect", "stop", "new_task"];
+const LABELS: readonly Label[] = ["continue", "instruction", "redirect", "question", "stop"];
 
-const STOP_PATTERN = /^(?:stop|halt|cancel|wait|hold on|nevermind|never mind)\b/i;
-const STOP_DOT_PATTERN = /^stop\./i;
-const CONTINUE_PATTERN =
-	/^(?:ok|okay|k|y|yes|yeah|yep|sure|continue|proceed|go|next|do it|carry on|keep going|whats next|what is next|perfect|great|lgtm|nice)\b/i;
-const REDIRECT_PATTERN = /\b(instead|actually|no,|rather|change|switch|forget that|different approach|scrap)\b/i;
+// Only a message that is nothing but the halt counts. The `^wait` form this
+// replaces fired on "wait so what does this mean?" — a question the pane had to
+// answer, which is the opposite of a halt. `wait` stays out entirely: it opens
+// questions far more often than it stops work.
+const HALT_ONLY =
+	/^(?:ok(?:ay)?\s+)?(?:stop|halt|cancel|abort|pause|hold on|hold up|never ?mind|nevermind|nvm)[\s.!,]*$/i;
+// Correction-of-course wording. `instead of X` and `switch to X` propose work
+// rather than repair a turn, so the bare `change`/`switch` markers are out and
+// `instead of` is excluded by lookahead. `actually`/`rather` only count when they
+// open a clause or close the message: mid-clause they are filler ("tbh actually we
+// may...", "...too actually"), and reading that as a correction was a mistake this
+// corpus made before the position was required.
+const CORRECTION_PATTERN =
+	/(?:^|[,.!?]\s*)(?:no|nope)\b|(?:^|[,.!?]\s*)(?:actually|rather)\b|\b(?:actually|rather)\b[\s.!?]*$|\binstead(?! of)\b|\bi meant\b|\boops\b|\bscratch that\b|\bnot that\b|\bforget that\b|\brevert(?:ing)?\b|\bscrap(?:ping)?\b|\bwrong\b/i;
+// Interrogative form only. `did/does/do` are deliberately absent: bare `do` opens
+// as many imperatives ("do the 3 commits") as questions, and a real question about
+// the work almost always closes with a question mark.
+const QUESTION_LEAD_PATTERN = /^(?:what|whats|what's|why|how|which|where|when|who|whose|is|are|was|were|have|has|any)\b/i;
+// "can you X?" / "please X" are requests for work, not questions about it.
+const REQUEST_LEAD_PATTERN = /^(?:can|could|would|will|please|pls)\b/i;
+// An order is not a question even when it wears a question mark. Only the leading
+// word decides this: `why is the build red` contains a directive verb ("build") and
+// is still a question, while `check the pdfs?` opens with the order.
+const IMPERATIVE_LEAD_PATTERN =
+	/^(?:add|run|check|fix|write|update|remove|delete|create|build|test|push|commit|refactor|use|try|start|stop|keep|make|move|rename|install|open|read|review|verify|show|list|give|tell|send|explain|find|look|go|do|let'?s|let us|dont|don'?t)\b/i;
+const DIRECTIVE_PATTERN =
+	/\b(?:please|pls|make sure|don'?t|do not|let'?s|we should|i want|i need|need to|you (?:should|need|must|can)|can you|could you|go ahead|add|run|check|fix|write|update|remove|delete|create|build|test|push|commit|refactor|use|try|start|stop|keep|make|move|rename|install|open|read|look at|review|verify)\b/i;
+// Words that acknowledge the agent's turn without adding anything to it. A message
+// made of nothing else is a go-ahead; one that has any other word is content.
+const ACK_WORDS: ReadonlySet<string> = new Set([
+	"ok", "okay", "k", "kk", "y", "ya", "yeah", "yep", "yup", "yes", "yea", "sure", "please", "pls",
+	"plz", "good", "great", "nice", "perfect", "cool", "right", "correct", "exactly", "indeed", "thanks",
+	"thank", "you", "ty", "go", "ahead", "that", "this", "then", "and", "so", "continue", "proceed", "next",
+	"on", "carry", "keep", "going", "lgtm", "alright", "all", "ight", "aight", "bet", "done", "now", "just",
+	"js", "rq", "quick", "both", "do", "it", "the", "as", "well", "same", "again", "more", "but", "also",
+]);
 
-const CONTINUE_MAX_CHARS = 80;
-const NEW_TASK_MIN_CHARS = 200;
 const CLIP_CHARS = 2000;
 const SUMMARY_CHARS = 200;
 
@@ -120,6 +199,7 @@ interface SessionScan {
 	meta: SessionMeta;
 	points: DecisionPoint[];
 	skippedSynthetic: number;
+	skippedUnlabelled: number;
 	badLines: number;
 }
 
@@ -199,39 +279,100 @@ function isHumanMessage(text: string): boolean {
 	return true;
 }
 
-interface Labelled {
+export interface Labelled {
 	label: Label;
 	labelReason: string;
 }
 
-function labelFor(raw: string): Labelled {
-	const text = stripInvisible(raw);
-
-	if (STOP_PATTERN.test(text) || STOP_DOT_PATTERN.test(text)) {
-		return { label: "stop", labelReason: "opens with a halt word" };
-	}
-	if (CONTINUE_PATTERN.test(text) && text.length < CONTINUE_MAX_CHARS) {
-		return { label: "continue", labelReason: "short affirmative acknowledgement" };
-	}
-	if (text.length > NEW_TASK_MIN_CHARS) {
-		return { label: "new_task", labelReason: "long message, no carry-over marker" };
-	}
-	if (REDIRECT_PATTERN.test(text)) {
-		return { label: "redirect", labelReason: "correction or redirection wording" };
-	}
-	return { label: "nudge", labelReason: "no explicit signal" };
+/** Lowercase, punctuation folded to spaces: the form the ack-word test needs. */
+function normalize(text: string): string {
+	return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function toDecisionPoint(turn: Turn, humanText: string, meta: SessionMeta): DecisionPoint | undefined {
-	const assistantText = clip(turn.texts.join("\n\n"), CLIP_CHARS);
-	if (!assistantText && turn.calls.length === 0) return undefined;
-	const { label, labelReason } = labelFor(humanText);
+/** The span that made a regex match, for the labelReason a human audits. */
+function matched(pattern: RegExp, text: string): string | undefined {
+	const found = pattern.exec(text);
+	return found === null ? undefined : found[0].trim();
+}
+
+/** Acknowledgements that can open a message without changing what it is. An order
+ *  still counts as an order after them ("okay do the step 6 ... right?"), and so
+ *  does a question ("okay whats next?"). Verb-ish ack words are excluded: "do" and
+ *  "go" are orders more often than they are nods. */
+const ACK_PREFIX_WORDS: ReadonlySet<string> = new Set([
+	"ok", "okay", "k", "kk", "y", "ya", "yeah", "yep", "yup", "yes", "yea", "sure", "ah", "oh", "hm",
+	"hmm", "mm", "mhmm", "right", "correct", "exactly", "indeed", "great", "cool", "nice", "perfect", "good",
+	"alright", "aight", "thanks", "ty", "thx", "please", "pls", "plz",
+]);
+
+/** The clause a message opens with, and whether that clause was closed by a
+ *  question mark. A question is decided on the opening clause: "okay yes please,
+ *  and commit in steps?" opens with an acknowledgement and is not a question, while
+ *  "whats next? lets continue" does ask one. */
+function firstClause(text: string): { head: string; closedByQuestion: boolean } {
+	const boundary = /[,.;!?\n]/.exec(text);
+	if (boundary === null) return { head: text, closedByQuestion: false };
+	return { head: text.slice(0, boundary.index), closedByQuestion: boundary[0] === "?" };
+}
+
+function stripAckPrefix(head: string): string {
+	const parts = head.trim().split(/\s+/);
+	let index = 0;
+	while (index < parts.length && ACK_PREFIX_WORDS.has(normalize(parts[index] ?? ""))) index += 1;
+	return parts.slice(index).join(" ");
+}
+
+/** A question is interrogative form with no request and no order in front of it:
+ *  the human wanted an answer, not work. "can you ...?" is a request for work. */
+function isQuestion(text: string): boolean {
+	const { head, closedByQuestion } = firstClause(text);
+	const opening = stripAckPrefix(head).toLowerCase();
+	if (REQUEST_LEAD_PATTERN.test(opening)) return false;
+	if (IMPERATIVE_LEAD_PATTERN.test(opening)) return false;
+	return closedByQuestion || QUESTION_LEAD_PATTERN.test(opening);
+}
+
+/** Every label is emitted for a named piece of evidence in the human's text, or
+ *  not at all. There is no fallback: a message that carries no evidence (no words)
+ *  returns undefined so the row is dropped instead of guessed at. */
+export function labelFor(raw: string): Labelled | undefined {
+	const text = stripInvisible(raw);
+	const lower = text.toLowerCase();
+	const tokens = normalize(text).split(" ").filter(Boolean);
+
+	if (tokens.length === 0) return undefined;
+	if (HALT_ONLY.test(text)) return { label: "stop", labelReason: "the message is only a halt" };
+	if (tokens.every((token) => ACK_WORDS.has(token))) {
+		return { label: "continue", labelReason: "nothing but an acknowledgement" };
+	}
+
+	const correction = matched(CORRECTION_PATTERN, lower);
+	if (correction !== undefined) {
+		return { label: "redirect", labelReason: `corrects the course the agent was on ("${correction}")` };
+	}
+	if (isQuestion(text)) {
+		return { label: "question", labelReason: "asks the agent something instead of telling it" };
+	}
+
+	const directive = matched(DIRECTIVE_PATTERN, lower);
+	if (directive !== undefined) {
+		return { label: "instruction", labelReason: `directive wording ("${directive}")` };
+	}
+	return { label: "instruction", labelReason: "content beyond an acknowledgement, no directive marker" };
+}
+
+function toDecisionPoint(
+	turn: Turn,
+	humanText: string,
+	{ label, labelReason }: Labelled,
+	meta: SessionMeta,
+): DecisionPoint {
 	return {
 		sessionId: meta.sessionId,
 		sessionPath: meta.sessionPath,
 		cwd: meta.cwd,
 		timestamp: turn.timestamp,
-		assistantText,
+		assistantText: clip(turn.texts.join("\n\n"), CLIP_CHARS),
 		toolCalls: turn.calls,
 		toolErrors: turn.toolErrors,
 		humanText: clip(humanText.trim(), CLIP_CHARS),
@@ -252,6 +393,7 @@ function scanSession(sessionPath: string): SessionScan {
 	const points: DecisionPoint[] = [];
 	let turn: Turn | undefined;
 	let skippedSynthetic = 0;
+	let skippedUnlabelled = 0;
 
 	for (const record of records) {
 		if (record["type"] !== "message") continue;
@@ -279,9 +421,15 @@ function scanSession(sessionPath: string): SessionScan {
 					break;
 				}
 				if (!turn) break;
-				const point = toDecisionPoint(turn, humanText, meta);
+				const labelled = labelFor(humanText);
+				const completed = turn;
 				turn = undefined;
-				if (point) points.push(point);
+				if (!labelled) {
+					skippedUnlabelled += 1;
+					break;
+				}
+				if (!completed.texts.length && completed.calls.length === 0) break;
+				points.push(toDecisionPoint(completed, humanText, labelled, meta));
 				break;
 			}
 			default:
@@ -289,7 +437,7 @@ function scanSession(sessionPath: string): SessionScan {
 		}
 	}
 
-	return { meta, points, skippedSynthetic, badLines };
+	return { meta, points, skippedSynthetic, skippedUnlabelled, badLines };
 }
 
 function listSessionFiles(root: string): string[] {
@@ -320,12 +468,14 @@ function main(): void {
 	const files = listSessionFiles(sessionsRoot);
 	const points: DecisionPoint[] = [];
 	let skippedSynthetic = 0;
+	let skippedUnlabelled = 0;
 	let badLines = 0;
 
 	for (const file of files) {
 		const scan = scanSession(file);
 		points.push(...scan.points);
 		skippedSynthetic += scan.skippedSynthetic;
+		skippedUnlabelled += scan.skippedUnlabelled;
 		badLines += scan.badLines;
 	}
 
@@ -337,8 +487,9 @@ function main(): void {
 	console.log(`decision points:  ${points.length}`);
 	for (const label of LABELS) console.log(`  ${label.padEnd(9)} ${counts.get(label) ?? 0}`);
 	console.log(`non-human user messages skipped: ${skippedSynthetic}`);
+	console.log(`unlabelled human messages dropped: ${skippedUnlabelled}`);
 	if (badLines > 0) console.log(`malformed lines skipped: ${badLines}`);
 	console.log(`wrote ${outPath}`);
 }
 
-main();
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();

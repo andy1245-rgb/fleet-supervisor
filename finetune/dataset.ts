@@ -319,7 +319,9 @@ function main(argv: readonly string[]): void {
 	const examples: Example[] = [];
 	const seen = new Set<string>();
 	const perClass: Record<Op, number> = { leave: 0, nudge: 0, declare_done: 0, flag: 0 };
-	const perLabel: Record<Label, number> = { continue: 0, nudge: 0, redirect: 0, stop: 0, new_task: 0 };
+	// Derived from the canonical map so a vocabulary change in label-to-op.ts
+	// cannot leave a stale literal here.
+	const perLabel = Object.fromEntries(Object.keys(LABEL_TO_OP).map((l) => [l, 0])) as Record<Label, number>;
 	const counts = { unreadable: 0, duplicate: 0, noArgument: 0, tooLong: 0, trimmed: 0 };
 	let longestExample = 0;
 	for (const line of lines) {
