@@ -22,13 +22,19 @@
 
 import { isOp, type Op } from "../decision/types.ts";
 import type { Phase } from "../fleet/registry.ts";
+import type { AgentStatus } from "../herdr/types.ts";
 import type { AskPolicy } from "../manager/ask.ts";
 import type { TriggerKind } from "../manager/triggers.ts";
+import type { OutcomeKind } from "./outcome.ts";
 
 /** Bumped whenever a required field changes meaning or a kind is added/removed.
  *  Old rows are then skipped by `parseEvent`, which is the point: a mixed-unit
- *  aggregate is worse than a smaller one. */
-export const SCHEMA_VERSION = 1;
+ *  aggregate is worse than a smaller one.
+ *
+ *  v2 adds the `outcome` kind. A v1 log is therefore no longer aggregated: its
+ *  rows are counted in `ignoredRows` and named as skipped, rather than being
+ *  averaged in beside judgments that did not exist when they were written. */
+export const SCHEMA_VERSION = 2;
 
 /** Which path produced a finding, and therefore what its cost and latency mean. */
 export type InspectionMode = "cheap" | "deep";
@@ -87,6 +93,22 @@ const DISPOSITIONS: Readonly<Record<ActionDisposition, true>> = {
 };
 
 const MODES: Readonly<Record<InspectionMode, true>> = { cheap: true, deep: true };
+
+const OUTCOME_KINDS: Readonly<Record<OutcomeKind, true>> = {
+	progressed: true,
+	stalled: true,
+	satisfied: true,
+	reopened: true,
+	unobserved: true,
+};
+
+const AGENT_STATUSES: Readonly<Record<AgentStatus, true>> = {
+	idle: true,
+	working: true,
+	blocked: true,
+	done: true,
+	unknown: true,
+};
 
 function known<K extends string>(set: Readonly<Record<K, true>>, value: unknown): value is K {
 	return typeof value === "string" && Object.hasOwn(set, value);
@@ -246,6 +268,42 @@ export interface ClaimEvent extends Base {
 	diverged: boolean;
 }
 
+/** What happened after a decision, as the next ticks observed it. This is the
+ *  only row in the log that is a *judgment about a decision* rather than a record
+ *  of what the supervisor did, and the only one a transcript could not have
+ *  produced: the decisions worth judging are the ones nobody typed anything
+ *  after. See ./outcome.ts for the rules, and for why only the silent-and-stalled
+ *  direction is evidence.
+ *
+ *  It carries the pane's own fields — status, idleTicks, cwd, title — because the
+ *  tick observed them for free with the snapshot it had already taken, and the
+ *  exporter needs them to build a row shaped like a bench task. */
+export interface OutcomeEvent extends Base {
+	kind: "outcome";
+	paneId: string;
+	group: string;
+	/** The op that was decided, and therefore what this is an outcome *of*. */
+	op: Op;
+	/** The verdict's kind. Named `outcomeKind` because `kind` is the event
+	 *  discriminator, as `triggerKind` is on a trigger. */
+	outcomeKind: OutcomeKind;
+	/** Ticks between the decision and the judgement, this one included. A count,
+	 *  never a duration: the tick interval is a setting. */
+	ticksObserved: number;
+	/** True when `completion_seq` advanced between the decision and the judgement. */
+	movedSinceDecision: boolean;
+	/** The decision's own text: a nudge's instruction, a leave's reason, a
+	 *  declaration's summary. Log-only — it is what the operator reads when asking
+	 *  why a pane was left alone. */
+	argument: string;
+	/** The pane's state at judgement. */
+	status: AgentStatus;
+	idleTicks: number;
+	/** The pane's tree at judgement; a nudge may not redirect past it. */
+	cwd: string;
+	title: string;
+}
+
 export interface EventByKind {
 	decision: DecisionEvent;
 	tick: TickEvent;
@@ -254,6 +312,7 @@ export interface EventByKind {
 	action: ActionEvent;
 	watchdog: WatchdogEvent;
 	claim: ClaimEvent;
+	outcome: OutcomeEvent;
 }
 
 export type EventKind = keyof EventByKind;
@@ -262,7 +321,7 @@ export type SchemaEvent = EventByKind[EventKind];
 
 // ------------------------------------------------------------- the validators
 
-type FieldType = "string" | "number" | "boolean" | "strings" | "op" | "policy" | "triggerKind" | "mode" | "disposition" | "phase" | "claimState";
+type FieldType = "string" | "number" | "boolean" | "strings" | "op" | "policy" | "triggerKind" | "mode" | "disposition" | "phase" | "claimState" | "outcomeKind" | "agentStatus";
 
 interface FieldSpec {
 	key: string;
@@ -357,6 +416,20 @@ const CLAIM_FIELDS: readonly FieldSpec[] = [
 	{ key: "diverged", type: "boolean", required: true },
 ];
 
+const OUTCOME_FIELDS: readonly FieldSpec[] = [
+	{ key: "paneId", type: "string", required: true },
+	{ key: "group", type: "string", required: true },
+	{ key: "op", type: "op", required: true },
+	{ key: "outcomeKind", type: "outcomeKind", required: true },
+	{ key: "ticksObserved", type: "number", required: true },
+	{ key: "movedSinceDecision", type: "boolean", required: true },
+	{ key: "argument", type: "string", required: true },
+	{ key: "status", type: "agentStatus", required: true },
+	{ key: "idleTicks", type: "number", required: true },
+	{ key: "cwd", type: "string", required: true },
+	{ key: "title", type: "string", required: true },
+];
+
 function fieldOk(value: unknown, type: FieldType): boolean {
 	switch (type) {
 		case "string":
@@ -381,6 +454,10 @@ function fieldOk(value: unknown, type: FieldType): boolean {
 			return known(PHASES, value);
 		case "claimState":
 			return known(CLAIM_STATES, value);
+		case "outcomeKind":
+			return known(OUTCOME_KINDS, value);
+		case "agentStatus":
+			return known(AGENT_STATUSES, value);
 	}
 }
 
@@ -444,6 +521,8 @@ export function parseEvent(line: string): SchemaEvent | undefined {
 			return accept<WatchdogEvent>(raw, WATCHDOG_FIELDS);
 		case "claim":
 			return accept<ClaimEvent>(raw, CLAIM_FIELDS);
+		case "outcome":
+			return accept<OutcomeEvent>(raw, OUTCOME_FIELDS);
 		default:
 			return undefined;
 	}
@@ -597,6 +676,29 @@ export interface ClaimRecord {
 export function makeClaim(record: ClaimRecord): ClaimEvent {
 	const { ts, ...rest } = record;
 	return { schema: SCHEMA_VERSION, kind: "claim", ts: stamp(ts), ...rest };
+}
+
+export interface OutcomeRecord {
+	paneId: string;
+	group: string;
+	op: Op;
+	outcomeKind: OutcomeKind;
+	ticksObserved: number;
+	movedSinceDecision: boolean;
+	argument: string;
+	status: AgentStatus;
+	idleTicks: number;
+	cwd: string;
+	title: string;
+	ts?: string;
+}
+
+/** One judgement. `outcomeKind`, `ticksObserved` and `movedSinceDecision` come
+ *  from ./outcome.ts unchanged: this layer may not re-derive what the judge
+ *  decided, or the log and the rule would be two opinions. */
+export function makeOutcome(record: OutcomeRecord): OutcomeEvent {
+	const { ts, ...rest } = record;
+	return { schema: SCHEMA_VERSION, kind: "outcome", ts: stamp(ts), ...rest };
 }
 
 // ------------------------------------------------------------- fork taxonomy
