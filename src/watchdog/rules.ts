@@ -124,6 +124,33 @@ export function classify(sample: CommandSample, rules: readonly Rule[] = RULES, 
 	return verdict;
 }
 
+/** What one finding contributes to the metric log.
+ *
+ *  The rule id and the stall verdict are the watchdog's own facts, so they are
+ *  named here and not re-derived by whoever writes the row. That is what keeps
+ *  "findings by rule" comparable across scans: every row names the rule the same
+ *  way the classifier did, including `no-rule`. */
+export interface FindingFields {
+	rule: string;
+	pid: number;
+	ageMs: number;
+	/** Clipped: a metric row is a measurement, not a place to keep a command line. */
+	command: string;
+	/** Present only when the scan re-sampled to tell slow from hung. */
+	stalled?: boolean;
+}
+
+export function findingFields(sample: CommandSample, verdict: Verdict): FindingFields {
+	const fields: FindingFields = {
+		rule: verdict.rule,
+		pid: sample.pid,
+		ageMs: sample.elapsedMs,
+		command: sample.command.slice(0, 200),
+	};
+	if (verdict.stalled !== undefined) fields.stalled = verdict.stalled;
+	return fields;
+}
+
 const CLOCK_TICKS = 100; // Linux USER_HZ; only used to convert stat fields to ms.
 
 interface RawStat {

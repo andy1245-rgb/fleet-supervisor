@@ -22,11 +22,12 @@ import { openRouterModel } from "../decision/openrouter.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../decision/types.ts";
 import { defaultNotifier, type Notifier } from "../notify/telegram.ts";
 import { scanTriggers, type ClaimHistory, type Trigger } from "./triggers.ts";
-import { scan as watchdogScan, formatAge } from "../watchdog/rules.ts";
+import { scan as watchdogScan, formatAge, findingFields } from "../watchdog/rules.ts";
 import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
-import { askId, shouldAsk, type AskPolicy, type AskRecord } from "./ask.ts";
+import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
 import { inspect, type Finding } from "./inspector.ts";
+import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
 
 export interface TickReport {
 	agents: number;
@@ -74,6 +75,53 @@ function writeJson(path: string, value: unknown): void {
 function appendEvent(config: Config, event: Record<string, unknown>): void {
 	mkdirSync(dirname(config.eventsPath), { recursive: true });
 	appendFileSync(config.eventsPath, `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`);
+}
+
+/** One typed measurement. Every stage's numbers reach the log through
+ *  ./metrics/schema.ts, so the report can read the file without knowing which
+ *  stage wrote which row, and a stage cannot invent a shape of its own. */
+function appendMetric(config: Config, event: SchemaEvent): void {
+	mkdirSync(dirname(config.eventsPath), { recursive: true });
+	appendFileSync(config.eventsPath, `${eventLine(event)}\n`);
+}
+
+/** Wall-clock milliseconds for a measurement. Deliberately not the injected clock:
+ *  `nowMs` exists so a test can decide *policy* deterministically, and a latency
+ *  measured on a frozen clock would always be zero. */
+function elapsed(startedAt: number): number {
+	return Math.max(0, Date.now() - startedAt);
+}
+
+function forkKinds(forks: readonly Fork[]): string[] | undefined {
+	if (forks.length === 0) return undefined;
+	return [...new Set(forks.map((fork) => forkKindOf(fork.reason)))];
+}
+
+function forkSeverities(forks: readonly Fork[]): string[] | undefined {
+	if (forks.length === 0) return undefined;
+	return [...new Set(forks.map((fork) => fork.severity))];
+}
+
+/** The worker-side read for one pane, recorded beside the decision it fed.
+ *  `diverged` is the claim-versus-herdr disagreement the divergence trigger is
+ *  grounded in, so that disagreement is a count instead of a re-derivation. */
+function recordClaim(config: Config, agent: HerdrAgent, claim: Claim | undefined, group: string): void {
+	if (!claim) {
+		appendMetric(config, makeClaim({ paneId: agent.paneId, group, phase: "unknown", state: "none", diverged: false }));
+		return;
+	}
+	const updated = Date.parse(claim.updated);
+	appendMetric(
+		config,
+		makeClaim({
+			paneId: agent.paneId,
+			group,
+			phase: claim.phase,
+			state: claim.state,
+			ageMs: Number.isFinite(updated) ? Math.max(0, Date.now() - updated) : undefined,
+			diverged: claim.state === "working" && agent.status !== "working",
+		}),
+	);
 }
 
 /** Maps a config model name to an adapter. */
@@ -156,6 +204,10 @@ export interface GateOutcome {
 	held: boolean;
 	policy: AskPolicy;
 	why: string;
+	/** Every contest the gate saw. Undefined severity is not a thing: a fork is
+	 *  hard or soft. Carried out of the gate so the action row can say which kind
+	 *  of contest held it, without the report re-reading prose. */
+	forks: readonly Fork[];
 	/** The record written, or undefined when an identical ask is already pending. */
 	record?: AskRecord;
 }
@@ -191,7 +243,7 @@ export async function askGate(args: GateArgs): Promise<GateOutcome> {
 		promptsSent: args.promptsSent,
 		maxPromptsPerTick: config.maxPromptsPerTick,
 	});
-	if (!gate.ask) return { held: false, policy, why: gate.why };
+	if (!gate.ask) return { held: false, policy, why: gate.why, forks: gate.forks };
 
 	if (args.pending.has(pendingKey(args.paneId, args.decision.op, args.decision.argument))) {
 		appendEvent(config, {
@@ -202,7 +254,7 @@ export async function askGate(args: GateArgs): Promise<GateOutcome> {
 			policy,
 			why: gate.why,
 		});
-		return { held: true, policy, why: gate.why };
+		return { held: true, policy, why: gate.why, forks: gate.forks };
 	}
 
 	const at = new Date(args.nowMs);
@@ -230,7 +282,7 @@ export async function askGate(args: GateArgs): Promise<GateOutcome> {
 		forks: record.forks,
 	});
 	await args.notifier.send(askMessage(record), "action");
-	return { held: true, policy, why: gate.why, record };
+	return { held: true, policy, why: gate.why, forks: gate.forks, record };
 }
 
 /** Worst first: a collision is two agents about to stomp the same files, a blocked
@@ -341,6 +393,28 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 		raw: JSON.stringify({ source: "inspector", ...proposed }),
 	};
 
+	const policy = askPolicyFor(config, args.group);
+	let forks: readonly Fork[] = [];
+	// One action row per outcome, from the same forks the gate reported, so "what
+	// the inspector proposed" and "what became of it" can never disagree.
+	const note = (disposition: ActionDisposition, reason: string, gated: boolean, latencyMs = 0): void => {
+		appendMetric(
+			config,
+			makeAction({
+				paneId: proposed.paneId,
+				group: args.group,
+				op: decision.op,
+				disposition,
+				reason,
+				latencyMs,
+				gated,
+				policy,
+				forkKinds: forkKinds(forks),
+				forkSeverities: forkSeverities(forks),
+			}),
+		);
+	};
+
 	// flag is already a request for a human, so it is reported rather than gated:
 	// holding it would mean holding a notification, and the finding's own
 	// notification has already carried the text.
@@ -352,6 +426,8 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 			text: decision.argument,
 			decision: describeDecision(decision),
 		});
+		// A flag changes nothing in the pane, so it is not a gated action either.
+		note("skipped", "flag-reported", false);
 		return NOTHING_APPLIED;
 	}
 
@@ -369,8 +445,12 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 		nowMs: args.nowMs,
 	});
 	const askRecorded = gate.record !== undefined;
+	forks = gate.forks;
 	if (gate.record) args.pending.add(pendingKey(proposed.paneId, decision.op, decision.argument));
-	if (gate.held) return { held: true, prompted: false, askRecorded };
+	if (gate.held) {
+		note("held", "gate", true);
+		return { held: true, prompted: false, askRecorded };
+	}
 
 	if (decision.op === "declare_done") {
 		if (!config.dry) {
@@ -390,16 +470,19 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 			writeClaim(claim);
 		}
 		appendEvent(config, { kind: "inspector_done", paneId: proposed.paneId, group: args.group, text: decision.argument, policy: gate.policy, why: gate.why, dry: config.dry });
+		note(config.dry ? "dry" : "sent", config.dry ? "dry" : "ok", true);
 		return { held: false, prompted: false, askRecorded };
 	}
 
 	// nudge
 	if (args.nowMs - (args.cooldowns[proposed.paneId] ?? 0) < config.nudgeCooldownMin * 60_000) {
 		appendEvent(config, { kind: "inspector_skipped", paneId: proposed.paneId, reason: "cooldown" });
+		note("skipped", "cooldown", false);
 		return { held: false, prompted: false, askRecorded };
 	}
 	if (args.promptsSent >= config.maxPromptsPerTick) {
 		appendEvent(config, { kind: "inspector_nudge_capped", paneId: proposed.paneId, text: decision.argument, policy: gate.policy, why: gate.why });
+		note("skipped", "capped", true);
 		return { held: false, prompted: false, askRecorded };
 	}
 	if (config.dry) {
@@ -411,11 +494,14 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 			policy: gate.policy,
 			why: gate.why,
 		});
+		note("dry", "dry", true);
 		return { held: false, prompted: false, askRecorded };
 	}
+	const promptStarted = Date.now();
 	const sent = await args.port.prompt(proposed.paneId, decision.argument);
 	if (sent.disposition === "rejected") {
 		appendEvent(config, { kind: "inspector_rejected", paneId: proposed.paneId, reason: sent.reason ?? "unknown" });
+		note("rejected", sent.reason ?? "unknown", true, elapsed(promptStarted));
 		return { held: false, prompted: false, askRecorded };
 	}
 	args.cooldowns[proposed.paneId] = args.nowMs;
@@ -428,12 +514,16 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 		policy: gate.policy,
 		why: gate.why,
 	});
+	note("sent", "ok", true, elapsed(promptStarted));
 	return { held: false, prompted: true, askRecorded };
 }
 
 export async function tick(deps: Deps): Promise<TickReport> {
 	const { port, notifier, config } = deps;
 	const nowMs = deps.now ?? Date.now;
+	// One clock read for the tick's own duration, which is what "is a pass getting
+	// slower" is measured from.
+	const tickStartedAt = Date.now();
 
 	const agents = await port.list();
 	const claims = readClaims();
@@ -467,6 +557,8 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		return { move, claim, input, result };
 	});
 
+	const models = new Set<string>();
+
 	for (const entry of decided) {
 		report.decisions.push(entry.result.decision);
 		report.costUsd += entry.result.trail.reduce((sum, d) => sum + d.costUsd, 0);
@@ -476,6 +568,15 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		const decision = entry.result.decision;
 		const group = groupOf(entry.move.agent, entry.claim);
 		const cwd = entry.move.agent.foregroundCwd || entry.move.agent.cwd;
+		// Read once and written on both rows, so a decision and its action can never
+		// record different policies.
+		const policy = askPolicyFor(config, group);
+		for (const consulted of entry.result.trail) models.add(consulted.model);
+		recordClaim(config, entry.move.agent, entry.claim, group);
+
+		/** How far this decision's action got. Undefined for `leave`, which is not one. */
+		let action: { disposition: ActionDisposition; reason: string; latencyMs: number; gated: boolean } | undefined;
+		let forks: readonly Fork[] = [];
 
 		// Every would-be action goes through the gate first. `held` means the action
 		// is parked in asks.jsonl and the operator has to release it — it is never
@@ -503,71 +604,114 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
 		if (decision.op === "leave") {
 			appendEvent(config, { kind: "decision", paneId: entry.move.paneId, group, decision: describeDecision(decision), escalated: entry.result.escalated, escalationFailed: entry.result.escalationFailed === true });
-			continue;
-		}
-
-		// flag is already a request for a human, so it is reported rather than gated:
-		// holding it would mean holding a notification.
-		if (decision.op === "flag") {
+		} else if (decision.op === "flag") {
+			// flag is already a request for a human, so it is reported rather than
+			// gated: holding it would mean holding a notification.
 			appendEvent(config, { kind: "flag", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision) });
 			await notifier.send(`${entry.move.paneId} (${group}) needs a decision\n${decision.argument}`, "alert");
-			continue;
-		}
-
-		if (decision.op === "declare_done") {
+			action = { disposition: "skipped", reason: "flag-reported", latencyMs: 0, gated: false };
+		} else if (decision.op === "declare_done") {
 			const gate = await gated();
-			if (gate.held) continue;
-			if (!config.dry) {
-				const base = entry.claim;
-				const claim: Claim = {
-					paneId: entry.move.paneId,
-					cwd,
-					intent: base?.intent ?? entry.move.agent.title,
-					phase: "idle",
-					state: "done",
-					last: decision.argument,
-					updated: new Date().toISOString(),
-				};
-				if (base?.group) claim.group = base.group;
-				if (base?.acceptance) claim.acceptance = base.acceptance;
-				if (base?.budget) claim.budget = base.budget;
-				writeClaim(claim);
+			forks = gate.forks;
+			if (gate.held) {
+				action = { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
+			} else {
+				if (!config.dry) {
+					const base = entry.claim;
+					const claim: Claim = {
+						paneId: entry.move.paneId,
+						cwd,
+						intent: base?.intent ?? entry.move.agent.title,
+						phase: "idle",
+						state: "done",
+						last: decision.argument,
+						updated: new Date().toISOString(),
+					};
+					if (base?.group) claim.group = base.group;
+					if (base?.acceptance) claim.acceptance = base.acceptance;
+					if (base?.budget) claim.budget = base.budget;
+					writeClaim(claim);
+				}
+				appendEvent(config, { kind: "done", paneId: entry.move.paneId, group, text: decision.argument, policy: gate.policy, why: gate.why });
+				await notifier.send(`${entry.move.paneId} (${group}) finished\n${decision.argument}`, "info");
+				action = { disposition: config.dry ? "dry" : "sent", reason: config.dry ? "dry" : "ok", latencyMs: 0, gated: true };
 			}
-			appendEvent(config, { kind: "done", paneId: entry.move.paneId, group, text: decision.argument, policy: gate.policy, why: gate.why });
-			await notifier.send(`${entry.move.paneId} (${group}) finished\n${decision.argument}`, "info");
-			continue;
+		} else {
+			// nudge
+			const lastPrompt = cooldowns[entry.move.paneId] ?? 0;
+			const cooling = nowMs() - lastPrompt < config.nudgeCooldownMin * 60_000;
+			if (cooling) {
+				appendEvent(config, { kind: "nudge_skipped", paneId: entry.move.paneId, reason: "cooldown" });
+				action = { disposition: "skipped", reason: "cooldown", latencyMs: 0, gated: false };
+			} else {
+				const gate = await gated();
+				forks = gate.forks;
+				if (gate.held) {
+					action = { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
+				} else if (report.promptsSent >= config.maxPromptsPerTick) {
+					appendEvent(config, { kind: "nudge_capped", paneId: entry.move.paneId, text: decision.argument, policy: gate.policy, why: gate.why });
+					action = { disposition: "skipped", reason: "capped", latencyMs: 0, gated: true };
+				} else if (config.dry) {
+					appendEvent(config, { kind: "nudge_dry", paneId: entry.move.paneId, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
+					action = { disposition: "dry", reason: "dry", latencyMs: 0, gated: true };
+				} else {
+					const promptStarted = Date.now();
+					const sent = await port.prompt(entry.move.paneId, decision.argument);
+					const latencyMs = elapsed(promptStarted);
+					report.promptsSent += 1;
+					if (sent.disposition === "rejected") {
+						appendEvent(config, { kind: "nudge_rejected", paneId: entry.move.paneId, reason: sent.reason ?? "unknown" });
+						await notifier.send(`${entry.move.paneId} refused the prompt (${sent.reason ?? "unknown"}) — it needs you`, "alert");
+						action = { disposition: "rejected", reason: sent.reason ?? "unknown", latencyMs, gated: true };
+					} else {
+						cooldowns[entry.move.paneId] = nowMs();
+						appendEvent(config, { kind: "nudge", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
+						action = { disposition: "sent", reason: "ok", latencyMs, gated: true };
+					}
+				}
+			}
 		}
 
-		// nudge
-		const lastPrompt = cooldowns[entry.move.paneId] ?? 0;
-		const cooling = nowMs() - lastPrompt < config.nudgeCooldownMin * 60_000;
-		if (cooling) {
-			appendEvent(config, { kind: "nudge_skipped", paneId: entry.move.paneId, reason: "cooldown" });
-			continue;
+		appendMetric(
+			config,
+			makeDecision({
+				paneId: entry.move.paneId,
+				group,
+				model: decision.model,
+				op: decision.op,
+				confidence: decision.confidence,
+				refused: decision.refused,
+				escalated: entry.result.escalated,
+				escalationFailed: entry.result.escalationFailed === true,
+				latencyMs: decision.latencyMs,
+				costUsd: decision.costUsd,
+				policy,
+				held: action?.disposition === "held",
+				decision: describeDecision(decision),
+			}),
+		);
+		if (action) {
+			appendMetric(
+				config,
+				makeAction({
+					paneId: entry.move.paneId,
+					group,
+					op: decision.op,
+					disposition: action.disposition,
+					reason: action.reason,
+					latencyMs: action.latencyMs,
+					gated: action.gated,
+					policy,
+					forkKinds: forkKinds(forks),
+					forkSeverities: forkSeverities(forks),
+				}),
+			);
 		}
-		const gate = await gated();
-		if (gate.held) continue;
-		if (report.promptsSent >= config.maxPromptsPerTick) {
-			appendEvent(config, { kind: "nudge_capped", paneId: entry.move.paneId, text: decision.argument, policy: gate.policy, why: gate.why });
-			continue;
-		}
-		if (config.dry) {
-			appendEvent(config, { kind: "nudge_dry", paneId: entry.move.paneId, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
-			continue;
-		}
-		const sent = await port.prompt(entry.move.paneId, decision.argument);
-		report.promptsSent += 1;
-		if (sent.disposition === "rejected") {
-			appendEvent(config, { kind: "nudge_rejected", paneId: entry.move.paneId, reason: sent.reason ?? "unknown" });
-			await notifier.send(`${entry.move.paneId} refused the prompt (${sent.reason ?? "unknown"}) — it needs you`, "alert");
-			continue;
-		}
-		cooldowns[entry.move.paneId] = nowMs();
-		appendEvent(config, { kind: "nudge", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
 	}
 
 	for (const trigger of triggers) {
 		appendEvent(config, { kind: `trigger:${trigger.kind}`, group: trigger.group, paneIds: trigger.paneIds, detail: trigger.detail });
+		appendMetric(config, makeTrigger({ triggerKind: trigger.kind, group: trigger.group, paneIds: trigger.paneIds, detail: trigger.detail }));
 	}
 
 	// Tier 2. A trigger is a question, not an announcement: the worst
@@ -601,16 +745,21 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
 		for (const trigger of inspecting) {
 			const scope = triggerScope(trigger, agents, claims);
+			// Tails are read before the clock starts: the inspection's latency is the
+			// model's, and a terminal read is not the thing being measured.
+			const tails = await readTails(scope, port, config);
+			const inspectionStarted = Date.now();
 			const finding = await inspect(trigger, {
 				agents: scope,
 				claims,
-				tails: await readTails(scope, port, config),
+				tails,
 				model: escalator,
 				deep: config.inspector === "deep",
 			});
 
 			report.inspected += 1;
 			report.costUsd += finding.costUsd;
+			models.add(finding.model);
 			appendEvent(config, {
 				kind: "inspector",
 				trigger: finding.trigger.kind,
@@ -624,6 +773,21 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				evidence: finding.evidence,
 				proposed: finding.proposed ?? null,
 			});
+			appendMetric(
+				config,
+				makeInspection({
+					triggerKind: finding.trigger.kind,
+					group: finding.trigger.group,
+					paneIds: finding.trigger.paneIds,
+					mode: finding.mode,
+					model: finding.model,
+					confidence: finding.confidence,
+					costUsd: finding.costUsd,
+					latencyMs: elapsed(inspectionStarted),
+					proposed: finding.proposed !== undefined,
+					degraded: finding.degraded,
+				}),
+			);
 			await notifier.send(formatFinding(finding), "action");
 
 			const proposed = finding.proposed;
@@ -652,7 +816,10 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		try {
 			const findings = await watchdogScan();
 			for (const { sample, verdict } of findings) {
-				appendEvent(config, { kind: "watchdog", pid: sample.pid, rule: verdict.rule, command: sample.command.slice(0, 200), ageMs: sample.elapsedMs });
+				// One row, not two: the watchdog's fields are the same fields the metric
+				// schema names, so the legacy line gains `schema` and `stalled` rather
+				// than being duplicated beside a structured copy of itself.
+				appendMetric(config, makeWatchdog(findingFields(sample, verdict)));
 				await notifier.send(`[${verdict.rule}] pid ${sample.pid} running ${formatAge(sample.elapsedMs)}\n${verdict.why}\n${sample.command.slice(0, 160)}`, "action");
 			}
 		} catch (e) {
@@ -663,19 +830,28 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	if (!config.dry) saveMarks(nextMarks);
 	writeJson(config.triggerHistoryPath, Object.fromEntries(nextHistory));
 	writeJson(config.cooldownsPath, cooldowns);
-	appendEvent(config, {
-		kind: "tick",
-		agents: report.agents,
-		moved: report.moved,
-		decisions: report.decisions.length,
-		escalated: report.escalated,
-		escalationFailed: report.escalationFailed,
-		prompts: report.promptsSent,
-		asks: report.asks,
-		costUsd: Number(report.costUsd.toFixed(6)),
-		triggers: report.triggers.length,
-		inspected: report.inspected,
-	});
+	// This row is the tick's own denominator: the same numbers as before, plus how
+	// long the pass took and which models it actually consulted, so "is a tick
+	// getting slower or more expensive" is a question about this row and not about
+	// the sum of everything else.
+	appendMetric(
+		config,
+		makeTick({
+			agents: report.agents,
+			moved: report.moved,
+			decisions: report.decisions.length,
+			escalated: report.escalated,
+			escalationFailed: report.escalationFailed,
+			triggers: report.triggers.length,
+			inspected: report.inspected,
+			prompts: report.promptsSent,
+			held: report.asks,
+			costUsd: Number(report.costUsd.toFixed(6)),
+			durationMs: elapsed(tickStartedAt),
+			models: [...models].sort(),
+			dry: config.dry,
+		}),
+	);
 	return report;
 }
 

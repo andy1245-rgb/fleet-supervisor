@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process";
 import { isOp, type DecisionInput, type DecisionModel, type Decision, type Op } from "../decision/types.ts";
 import { groupOf } from "../fleet/groups.ts";
+import type { InspectionMode } from "../metrics/schema.ts";
 import type { Claim } from "../fleet/registry.ts";
 import type { HerdrAgent } from "../herdr/types.ts";
 import type { Trigger } from "./triggers.ts";
@@ -52,6 +53,12 @@ export interface Finding {
 	confidence: number;
 	model: string;
 	costUsd: number;
+	/** Which path produced this: the cheap model, or the deep child. */
+	mode: InspectionMode;
+	/** True when the requested path did not deliver — `deep` fell back to `cheap`,
+	 *  or the model call failed — so the latency and cost are not what was asked
+	 *  for. A supervisor whose inspector silently downgrades has no way to notice. */
+	degraded: boolean;
 }
 
 /** The action a finding may carry. Nothing more than a decision the inspector
@@ -408,7 +415,7 @@ interface ModelAnswer {
 
 /** Turns whatever the model said into a validated Finding. Anything unparsed is
  *  still reported — it is evidence about the group — but it carries no action. */
-function assemble(trigger: Trigger, answer: ModelAnswer): Finding {
+function assemble(trigger: Trigger, answer: ModelAnswer, mode: InspectionMode): Finding {
 	if (!answer.object) {
 		const text = answer.text.trim();
 		return {
@@ -419,6 +426,8 @@ function assemble(trigger: Trigger, answer: ModelAnswer): Finding {
 			confidence: 0,
 			model: answer.model,
 			costUsd: answer.costUsd,
+			mode,
+			degraded: false,
 		};
 	}
 
@@ -439,13 +448,15 @@ function assemble(trigger: Trigger, answer: ModelAnswer): Finding {
 		confidence,
 		model: answer.model,
 		costUsd: answer.costUsd,
+		mode,
+		degraded: false,
 	};
 	const proposed = inRange ? validateProposed(proposalCandidate(trigger, object), trigger) : undefined;
 	if (proposed) finding.proposed = proposed;
 	return finding;
 }
 
-function unavailable(trigger: Trigger, reason: string, model: string): Finding {
+function unavailable(trigger: Trigger, reason: string, model: string, mode: InspectionMode): Finding {
 	return {
 		trigger,
 		diagnosis: `the inspector could not run: ${reason}`,
@@ -454,6 +465,8 @@ function unavailable(trigger: Trigger, reason: string, model: string): Finding {
 		confidence: 0,
 		model,
 		costUsd: 0,
+		mode,
+		degraded: true,
 	};
 }
 
@@ -499,7 +512,7 @@ async function inspectDeep(trigger: Trigger, brief: string, ctx: InspectContext)
 	if (!out.ok) return undefined;
 	const object = jsonObjectIn(out.stdout);
 	if (!object) return undefined;
-	return assemble(trigger, { object, text: out.stdout, model: "pi:deep", costUsd: 0 });
+	return assemble(trigger, { object, text: out.stdout, model: "pi:deep", costUsd: 0 }, "deep");
 }
 
 async function inspectCheap(trigger: Trigger, brief: string, ctx: InspectContext): Promise<Finding> {
@@ -507,14 +520,18 @@ async function inspectCheap(trigger: Trigger, brief: string, ctx: InspectContext
 	try {
 		decision = await ctx.model.decide(cheapInput(trigger, brief, ctx));
 	} catch (e) {
-		return unavailable(trigger, (e as Error).message, ctx.model.name);
+		return unavailable(trigger, (e as Error).message, ctx.model.name, "cheap");
 	}
-	return assemble(trigger, {
-		object: jsonObjectIn(decision.raw),
-		text: decision.raw,
-		model: decision.model,
-		costUsd: decision.costUsd,
-	});
+	return assemble(
+		trigger,
+		{
+			object: jsonObjectIn(decision.raw),
+			text: decision.raw,
+			model: decision.model,
+			costUsd: decision.costUsd,
+		},
+		"cheap",
+	);
 }
 
 /** Investigates one trigger. Never mutates a pane, never prompts: what comes
@@ -524,7 +541,10 @@ export async function inspect(trigger: Trigger, ctx: InspectContext): Promise<Fi
 	if (ctx.deep === true) {
 		const deep = await inspectDeep(trigger, brief, ctx);
 		if (deep) return deep;
-		// pi is missing, timed out, or answered in prose: cheap is the floor, not an error.
+		// pi is missing, timed out, or answered in prose: cheap is the floor, not an
+		// error. The finding stays, and says it is the fallback rather than the deep
+		// look that was paid for.
+		return { ...(await inspectCheap(trigger, brief, ctx)), degraded: true };
 	}
 	return inspectCheap(trigger, brief, ctx);
 }
