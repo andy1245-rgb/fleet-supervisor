@@ -24,6 +24,7 @@ tables and the JSON are built from one object, so they cannot disagree.
 | What fraction of triggers yield an actionable finding? | `inspections.proposed.rate`, `inspections.byTriggerKind[].rate`, `inspections.costUsd` |
 | Is a tick getting slower or more expensive? | `ticks.durationMs`, `ticks.costUsd`, `ticks.models` |
 | Is the primary enough, or is everything escalating? | `decisions.escalation`, `decisions.refusalByModel` |
+| Was staying out of the way right, and was a finished job finished? | `outcomes.byOpKind`, `outcomes.silence` |
 
 ## The log
 
@@ -32,7 +33,7 @@ line, ever: the supervisor only appends, and the store only reads.
 
 Every row written from now on carries two fields:
 
-- `schema` — `SCHEMA_VERSION` (`src/metrics/schema.ts`, currently `1`). A row
+- `schema` — `SCHEMA_VERSION` (`src/metrics/schema.ts`, currently `2`). A row
   whose version is not the current one is **not read**: `parseEvent` rejects it
   and the store counts it. A mixed-unit aggregate is worse than a smaller one.
 - `ts` — ISO 8601. Every window, every per-day bucket and every ordering decision
@@ -172,6 +173,30 @@ Emitted by `src/manager/tick.ts` beside the decision it fed: `phase`, `state`
 `working` and herdr does not. That boolean is the disagreement the `divergence`
 trigger is grounded in, recorded as a count instead of re-derived from prose.
 
+### `outcome` — one decision, judged by what happened next
+
+Emitted by `src/manager/tick.ts` when a decision's question closes: `op`,
+`outcomeKind`, `ticksObserved`, `movedSinceDecision`, the decision's `argument`,
+and the pane's own `status`/`idleTicks`/`cwd`/`title` at judgement. The verdict
+itself comes from `judge` in `src/metrics/outcome.ts` unchanged — this row is a
+report of that rule, not a second opinion on it.
+
+The point of the row is that it is the only evidence in the log that no
+transcript could produce. `completion_seq` advanced since the decision → the pane
+moved, and it became `progressed` (or `reopened`, when the op was
+`declare_done` and the pane carried on past its own declaration). It did not
+advance, the pane is resting, and `DEFAULT_WINDOW_TICKS` (3) have elapsed → it
+became `stalled` for a silent op, `satisfied` for a `declare_done`, and nothing
+at all for a `nudge` — a nudge that produced no movement is a repair rate, not a
+label. A pane that left the snapshot, or whose counter went backwards, is
+`unobserved`: not seen moving and not seen still.
+
+Open questions live in `<state>/pending.json`, beside the log they explain, one
+entry per pane with the decision's `decidedAtSeq` and the ticks already spent.
+It is rewritten atomically (tmp + rename, like `marks.json`) and only when it has
+changed, and a malformed file is read as empty rather than stopping a tick. A
+restart therefore resumes mid-window instead of restarting the clock.
+
 ## The metrics
 
 All of these are counted from rows in the selected window. A rate with an empty
@@ -249,6 +274,68 @@ consulted, in how many ticks.
 - **claims** — by state, divergence rate, and the age distribution of the claim
   files the supervisor read.
 
+### Outcomes
+
+- **counts by `(op, outcomeKind)`** — every pair that occurred, largest first. A
+  pair that never occurred is absent, not zero, because `judge` cannot produce all
+  twenty combinations.
+- **counts by `outcomeKind`** — the whole taxonomy in order, zeros included:
+  "never `reopened`" is a fact about the supervisor and an empty list would hide
+  it.
+- **silent-decision precision** — of the times the supervisor said nothing
+  (`leave` or `flag`, i.e. `isSilent(op)`), what fraction of the panes moved
+  anyway: `progressed / (progressed + stalled)`. A silent decision whose pane left
+  the snapshot is `unobserved` and is excluded from the denominator and reported
+  as `silence.dropped`, because it is no evidence either way.
+
+  It is **not quoted below `MIN_SILENT_DECISIONS` (20) judged decisions**. Under
+  twenty the 95% interval on a proportion is wider than the distinction being
+  measured, so the report prints `insufficient data (n decisions; 20 needed)`
+  instead of a rate. When it is quoted, it reads
+  `50.0% of 24 silent decisions progressed`.
+
+  Read it as *the supervisor's silence did not visibly cost anything*, not as
+  *the silence was correct*: a pane that moved may have moved for its own
+  reasons, and nothing here observes a reason.
+
+## Bench rows from judged outcomes
+
+```
+node src/metrics/export-observed.ts                          # beside the log
+node src/metrics/export-observed.ts --log=… --out=…          # explicit paths
+```
+
+`src/metrics/export-observed.ts` exports `outcome` rows as candidate bench tasks
+in the shape `bench/tasks/tasks.jsonl` uses — `{id, input, expectedOp,
+provenance}` — with `provenance: "observed"` so a mined row and an observed row
+can never be confused afterwards. `humanText` is absent and stays absent: nobody
+typed anything, which is the entire reason these rows exist.
+
+| outcome | row |
+|---|---|
+| silent op, `stalled` | `expectedOp: "nudge"` — the counterexample |
+| silent op, `progressed` | `expectedOp: "leave"` — the silence cost nothing visible |
+| `declare_done`, `reopened` | `expectedOp: "nudge"` — a premature stop |
+| anything else | skipped, counted, and printed with its reason |
+
+**This is correlation, not causation.** A judged outcome says what the fleet
+looked like some ticks later; it does not say why the pane moved or did not. An
+agent may move after a nudge because the nudge worked, because the turn it was
+already in finished, because a test runner returned, or because a human typed
+into the pane. Nothing here observes a reason, so **a nudge followed by movement
+can never become a positive label** — that direction is unidentifiable, and the
+exporter never emits it.
+
+The defensible use is the counterexample: the supervisor said nothing, the pane
+rested, the window elapsed. Whatever the cause, the supervisor stayed out of the
+way of a pane that then needed something. Those rows are the ones a transcript
+cannot produce, because a transcript only records the moments a human spoke.
+
+The rows are also thin on purpose: `outcome` carries the pane, the op, the
+verdict and the pane's state, and no terminal output, claim or intent. The
+`input` therefore has `tail: ""` and `phase: "unknown"`, and nothing is
+reconstructed from a transcript this exporter does not have.
+
 ## What is absent, and why that is reported
 
 Two fields are optional because no stage can supply them honestly:
@@ -272,6 +359,11 @@ unknown (no re-sampling scan, no claim file), and coverage says how many rows.
 - Every number is derived from rows. Nothing is estimated, extrapolated or
   carried over from a previous run.
 - Rates are `null`, not zero, when the denominator is empty.
+- A rate is `null` below its stated floor as well: silent-decision precision needs
+  `MIN_SILENT_DECISIONS` judged decisions before the report prints a percentage,
+  and it prints the count and the floor until then.
+- An `outcome` row is correlation, not causation. Nothing in this layer — or in
+  the exporter built on it — claims that a supervisor's nudge caused movement.
 - Percentiles are nearest-rank over values that occurred.
 - Percentages are shares of the metric's own stated denominator, printed next to
   the ratio (`1/4 (25.0%)`), so a reader can always see what it was out of.

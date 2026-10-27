@@ -17,7 +17,8 @@
 
 import { loadConfig } from "../manager/config.ts";
 import type { Op } from "../decision/types.ts";
-import { SCHEMA_VERSION, type ActionEvent, type ClaimEvent, type DecisionEvent, type InspectionEvent, type SchemaEvent, type TickEvent, type TriggerEvent, type WatchdogEvent } from "./schema.ts";
+import { SCHEMA_VERSION, type ActionEvent, type ClaimEvent, type DecisionEvent, type InspectionEvent, type OutcomeEvent, type SchemaEvent, type TickEvent, type TriggerEvent, type WatchdogEvent } from "./schema.ts";
+import { isSilent, type OutcomeKind } from "./outcome.ts";
 import { isMetricsWindow, openStore, type MetricsWindow } from "./store.ts";
 import { formatReport } from "./render.ts";
 
@@ -169,6 +170,46 @@ export interface ClaimsReport {
 	ageMs: Distribution;
 }
 
+/** Judgments of decisions by what happened next: the only part of this report
+ *  that is about the supervisor's effect rather than its activity.
+ *
+ *  The one rate worth quoting is silent-decision precision — of the times the
+ *  supervisor stayed silent, how often did the pane move anyway. It is quoted
+ *  only above a floor, because a rate over a handful of decisions is a number
+ *  whose next observation moves it by tens of points, and a supervisor tuned on
+ *  it would be tuned on noise. */
+export interface OutcomesReport {
+	total: number;
+	/** Every (op, verdict) pair that occurred, largest first. A pair that never
+	 *  occurred is absent rather than zero: the judge cannot produce all twenty. */
+	byOpKind: Array<{ op: Op; outcomeKind: OutcomeKind; count: number; share: number }>;
+	/** The whole taxonomy, in order, zeros included: "never reopened" is a fact
+	 *  about the supervisor, and an empty list would hide it. */
+	byKind: Array<{ outcomeKind: OutcomeKind; count: number }>;
+	ticksObserved: Distribution;
+	silence: {
+		/** Silent decisions with a verdict about movement — `progressed` plus
+		 *  `stalled`. The denominator of `precision`. */
+		decisions: number;
+		progressed: number;
+		stalled: number;
+		/** Silent decisions whose pane left the snapshot: no verdict, excluded. */
+		dropped: number;
+		/** Null below `threshold`, where it is unknowable rather than zero. */
+		precision: number | null;
+		/** What to print: the rate, or `insufficient data (n decisions)`. */
+		precisionText: string;
+		threshold: number;
+	};
+}
+
+/** Judged silent decisions needed before a precision is quoted. Twenty is the
+ *  smallest count at which the 95% interval on a proportion is narrower than the
+ *  effect being looked for — ±22 points, against a distinction (stay out of the
+ *  way versus be needed) that is not subtle. Below it the report prints the count
+ *  and no rate. */
+export const MIN_SILENT_DECISIONS = 20;
+
 export interface MetricsReport {
 	reportSchema: number;
 	window: MetricsWindow;
@@ -186,6 +227,7 @@ export interface MetricsReport {
 	inspections: InspectionsReport;
 	watchdog: WatchdogReport;
 	claims: ClaimsReport;
+	outcomes: OutcomesReport;
 	/** Plain-language caveats about this window: absent fields, null rates. */
 	notes: string[];
 }
@@ -276,6 +318,7 @@ function decileOf(confidence: number): number {
 }
 
 const OPS: readonly Op[] = ["leave", "nudge", "declare_done", "flag"];
+const OUTCOME_KINDS: readonly OutcomeKind[] = ["progressed", "stalled", "satisfied", "reopened", "unobserved"];
 const DISPOSITIONS = ["sent", "held", "rejected", "skipped", "dry"] as const;
 
 // --------------------------------------------------------------- aggregation
@@ -483,6 +526,48 @@ function claimsReport(claims: readonly ClaimEvent[]): ClaimsReport {
 	return { total: claims.length, byState, diverged: { count: diverged, rate: ratio(diverged, claims.length) }, ageMs: distribution(ages) };
 }
 
+function outcomesReport(outcomes: readonly OutcomeEvent[]): OutcomesReport {
+	const total = outcomes.length;
+
+	const byOpKind = ranked(countBy(outcomes, (outcome) => `${outcome.op}:${outcome.outcomeKind}`)).map(({ items }) => {
+		const first = items[0] as OutcomeEvent;
+		return { op: first.op, outcomeKind: first.outcomeKind, count: items.length, share: share(items.length, total) };
+	});
+
+	const byKind = OUTCOME_KINDS.map((outcomeKind) => ({ outcomeKind, count: outcomes.filter((outcome) => outcome.outcomeKind === outcomeKind).length }));
+
+	// Silence is the op asking for nothing: `leave` does nothing and `flag` only
+	// tells a human. Those are the decisions whose outcome cannot be read from a
+	// transcript, and the only ones where a movement is evidence of anything.
+	const silent = outcomes.filter((outcome) => isSilent(outcome.op));
+	const progressed = silent.filter((outcome) => outcome.outcomeKind === "progressed").length;
+	const stalled = silent.filter((outcome) => outcome.outcomeKind === "stalled").length;
+	const dropped = silent.filter((outcome) => outcome.outcomeKind === "unobserved").length;
+	const decisions = progressed + stalled;
+	const precision = decisions < MIN_SILENT_DECISIONS ? null : progressed / decisions;
+	const precisionText =
+		precision === null
+			? `insufficient data (${decisions} decision${decisions === 1 ? "" : "s"}; ${MIN_SILENT_DECISIONS} needed)`
+			: `${(precision * 100).toFixed(1)}% of ${decisions} silent decisions progressed`;
+
+	return {
+		total,
+		byOpKind,
+		byKind,
+		ticksObserved: distribution(outcomes.map((outcome) => outcome.ticksObserved)),
+		silence: { decisions, progressed, stalled, dropped, precision, precisionText, threshold: MIN_SILENT_DECISIONS },
+	};
+}
+
+/** The outcome section as one printable line. ./render.ts owns the tables and
+ *  this module owns every number in it, so the section reaches the human report
+ *  through the notes below rather than through a second formatter that could
+ *  disagree with the JSON. */
+export function outcomeSummary(report: OutcomesReport): string {
+	const pairs = report.byOpKind.length === 0 ? "no judged outcomes" : report.byOpKind.map((entry) => `${entry.op}×${entry.outcomeKind} ${entry.count}`).join(", ");
+	return `outcomes ${report.total} (${pairs}) · silent-decision precision ${report.silence.precisionText}`;
+}
+
 function coverageOf(events: readonly SchemaEvent[]): FieldCoverage[] {
 	const has = (event: SchemaEvent, key: string): boolean => (event as unknown as Record<string, unknown>)[key] !== undefined;
 	const out: FieldCoverage[] = [];
@@ -528,6 +613,13 @@ function notesFor(report: Omit<MetricsReport, "notes">): string[] {
 	if (report.actions.hold.held > 0 && report.actions.hold.byForkKind.length === 0) {
 		notes.push("every hold here came from a policy that asks unconditionally: no held action carried a fork");
 	}
+	notes.push(outcomeSummary(report.outcomes));
+	if (report.outcomes.silence.dropped > 0) {
+		notes.push(`${report.outcomes.silence.dropped} silent decision(s) have no verdict: the pane left the snapshot, so it was neither seen moving nor seen still`);
+	}
+	if (report.outcomes.total > 0) {
+		notes.push("an outcome is correlation, not causation: a pane that moved after a nudge may have moved for its own reasons, so no nudge-followed-by-movement row is a positive label");
+	}
 	return notes;
 }
 
@@ -542,6 +634,7 @@ export function buildReport(input: ReportInput): MetricsReport {
 	const inspections: InspectionEvent[] = [];
 	const watchdog: WatchdogEvent[] = [];
 	const claims: ClaimEvent[] = [];
+	const outcomes: OutcomeEvent[] = [];
 	for (const event of events) {
 		switch (event.kind) {
 			case "decision":
@@ -564,6 +657,9 @@ export function buildReport(input: ReportInput): MetricsReport {
 				break;
 			case "claim":
 				claims.push(event);
+				break;
+			case "outcome":
+				outcomes.push(event);
 				break;
 		}
 	}
@@ -592,6 +688,7 @@ export function buildReport(input: ReportInput): MetricsReport {
 		inspections: inspectionsReport(inspections, ticks),
 		watchdog: watchdogReport(watchdog),
 		claims: claimsReport(claims),
+		outcomes: outcomesReport(outcomes),
 	};
 
 	return { ...withoutNotes, notes: notesFor(withoutNotes) };

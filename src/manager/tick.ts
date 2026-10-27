@@ -27,7 +27,8 @@ import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
 import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
 import { inspect, type Finding } from "./inspector.ts";
-import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
+import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
+import { DEFAULT_WINDOW_TICKS, decidedAt, isSilent, judge, observedTicks, parsePending, pendingJson, pendingPath, recordPending, type Observation, type PendingDecision } from "../metrics/outcome.ts";
 
 export interface TickReport {
 	agents: number;
@@ -90,6 +91,70 @@ function appendMetric(config: Config, event: SchemaEvent): void {
  *  measured on a frozen clock would always be zero. */
 function elapsed(startedAt: number): number {
 	return Math.max(0, Date.now() - startedAt);
+}
+
+/** The open decisions, from the file beside the log they explain. A malformed or
+ *  absent file is empty, not fatal: this is bookkeeping, and one hand-edited line
+ *  must not stop a tick. */
+function readPending(path: string): Map<string, PendingDecision> {
+	try {
+		return parsePending(readFileSync(path, "utf8"));
+	} catch {
+		return new Map();
+	}
+}
+
+/** Judges every open decision against the snapshot this tick already took, and
+ *  appends one `outcome` row per verdict. A judged decision leaves the map; one
+ *  still open carries its incremented tick count, because `judge` counts the
+ *  current tick when it is called and the two must not disagree about that.
+ *
+ *  The trimmed map is written here, not at the end of the tick: a judgement is
+ *  appended to the log and removed from the file in the same breath, so the
+ *  window in which a crash could leave a judged decision behind to be judged
+ *  twice is a rewrite rather than the rest of a tick's network work.
+ *
+ *  No herdr call: the snapshot in hand is the observation, which is what makes
+ *  this free. A pane that is no longer listed is reported `present: false` rather
+ *  than as a pane that sat still. */
+function judgeOpen(config: Config, agents: readonly HerdrAgent[], idleTicks: ReadonlyMap<string, number>): { open: Map<string, PendingDecision>; judged: number } {
+	const open = readPending(pendingPath(config.eventsPath));
+	if (open.size === 0) return { open, judged: 0 };
+
+	const byPane = new Map(agents.map((agent) => [agent.paneId, agent]));
+	const still: Map<string, PendingDecision> = new Map();
+	let judged = 0;
+
+	for (const [paneId, pending] of open) {
+		const agent = byPane.get(paneId);
+		const observation: Observation = agent === undefined ? { completionSeq: pending.decidedAtSeq, status: "unknown", present: false } : { completionSeq: agent.completionSeq, status: agent.status };
+		const outcome = judge(pending, observation, DEFAULT_WINDOW_TICKS);
+		if (outcome === undefined) {
+			still.set(paneId, { ...pending, ticksObserved: observedTicks(pending) });
+			continue;
+		}
+		judged += 1;
+		appendMetric(
+			config,
+			makeOutcome({
+				paneId,
+				group: pending.group,
+				op: pending.op,
+				outcomeKind: outcome.kind,
+				ticksObserved: outcome.ticksObserved,
+				movedSinceDecision: outcome.movedSinceDecision,
+				argument: pending.argument,
+				status: agent?.status ?? "unknown",
+				idleTicks: agent === undefined ? 0 : (idleTicks.get(paneId) ?? 0),
+				cwd: agent?.foregroundCwd || agent?.cwd || "",
+				title: agent?.title ?? "",
+			}),
+		);
+	}
+
+	// Nothing open and nothing judged is nothing to say: the file is untouched.
+	if (still.size > 0 || judged > 0) writeJson(pendingPath(config.eventsPath), pendingJson(still));
+	return { open: still, judged };
 }
 
 function forkKinds(forks: readonly Fork[]): string[] | undefined {
@@ -531,6 +596,17 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const { moves, marks: nextMarks } = detect(agents, marks);
 
 	const idleTicks = new Map(Object.entries(nextMarks).map(([pane, mark]) => [pane, mark.idleTicks]));
+
+	// Outcome judging, before this tick's own decisions are recorded. The order is
+	// the point: a decision taken further down carries the pane's current sequence
+	// as its baseline, so the movement that prompted it can never be read as its
+	// answer. Dry is a rehearsal — its snapshot is real, its decisions are not — so
+	// it neither judges nor records, and leaves none of its own state behind.
+	const outcomeState = config.dry ? { open: new Map<string, PendingDecision>(), judged: 0 } : judgeOpen(config, agents, idleTicks);
+	let pendingOutcomes = outcomeState.open;
+	// Only a decision recorded below has to be written at the end of the tick: the
+	// judged set was already persisted by `judgeOpen`.
+	let pendingDirty = false;
 	const history = readJson<Record<string, ClaimHistory>>(config.triggerHistoryPath, {});
 	const historyMap = new Map(Object.entries(history));
 	const { triggers, history: nextHistory } = scanTriggers(agents, claims, idleTicks, historyMap);
@@ -707,6 +783,18 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				}),
 			);
 		}
+
+		// Only a decision that reached the pane is worth judging. A held action
+		// waited for the operator, a skipped one never happened and a rejected one
+		// was refused by herdr before any input: judging any of them would read the
+		// operator's delay or the transport's refusal as the agent's answer. The
+		// silent ops asked for nothing, so their absence of an action is the point —
+		// and `flag` writes a `skipped` row precisely because a human notification is
+		// not an instruction to the pane.
+		if (!config.dry && (isSilent(decision.op) || action?.disposition === "sent")) {
+			pendingOutcomes = recordPending(pendingOutcomes, decidedAt({ paneId: entry.move.paneId, group, op: decision.op, argument: decision.argument }, entry.move.agent.completionSeq));
+			pendingDirty = true;
+		}
 	}
 
 	for (const trigger of triggers) {
@@ -830,6 +918,9 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	if (!config.dry) saveMarks(nextMarks);
 	writeJson(config.triggerHistoryPath, Object.fromEntries(nextHistory));
 	writeJson(config.cooldownsPath, cooldowns);
+	// Written only when it changed: a rewrite with nothing to say is a file whose
+	// mtime lies about when the fleet last moved.
+	if (pendingDirty) writeJson(pendingPath(config.eventsPath), pendingJson(pendingOutcomes));
 	// This row is the tick's own denominator: the same numbers as before, plus how
 	// long the pass took and which models it actually consulted, so "is a tick
 	// getting slower or more expensive" is a question about this row and not about
