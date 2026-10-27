@@ -21,3 +21,7 @@ finetune/checkpoints/
 # Generated fine-tune artifacts (`make data/train/build`); bench/results and
 # bench/tasks are NOT ignored — those are the empirical history.
 finetune/out/
+
+# Trainer scratch dirs created by ad-hoc probes
+checkpoints/
+lora-*.safetensors

@@ -16,12 +16,12 @@ import time
 os.environ.setdefault("NEEDLE_TELEMETRY", "0")
 
 # One decode per decision, and 96 generated tokens rather than the stock 512.
-# Both numbers come from the engine's 1024-token sliding window and the 401-token
+# Both numbers come from the engine's 1024-token sliding window and the 333-token
 # static prefix that needle_init() builds from the system text and the four tool
-# schemas: at max_new_tokens=512 the input budget is 1024 - 401 - 512 = 111 tokens
-# (~421 chars), which no real fleet tail fits, so the engine degenerates into a
+# schemas: at max_new_tokens=512 the input budget is 1024 - 333 - 512 = 179 tokens
+# (~570 chars), which no real fleet tail fits, so the engine degenerates into a
 # self-repeating reasoning block until the adapter's 30s timeout fires. At 96 the
-# input budget is 527 tokens (~2000 chars).
+# input budget is 595 tokens (~1900 chars).
 #
 # Decode once, not via run(): run() is a tool-execution loop, and even at
 # max_steps=1 it re-decodes after executing the tool and returns *that* second
@@ -38,22 +38,22 @@ def main() -> None:
     # would need to feed back.
     @needle.tool
     def leave(reason: str):
-        "Agent is on track, no action needed. argument: short reason."
+        "Agent is on track; no action."
         return {"ok": True}
 
     @needle.tool
     def nudge(message: str):
-        "Agent stopped before finishing. argument: the instruction to send it."
+        "Agent stopped before finishing; send this."
         return {"ok": True}
 
     @needle.tool
     def declare_done(summary: str):
-        "Agent met its acceptance criteria. argument: what was delivered."
+        "Criteria met; what was delivered."
         return {"ok": True}
 
     @needle.tool
     def flag(problem: str):
-        "Needs a human or a stronger model. argument: the problem."
+        "Needs a human or stronger model."
         return {"ok": True}
 
     tools = [leave, nudge, declare_done, flag]

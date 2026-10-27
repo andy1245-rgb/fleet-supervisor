@@ -3,18 +3,17 @@
 
 import type { DecisionInput } from "./types.ts";
 
-export const SYSTEM = `You supervise one coding agent working unattended. Choose exactly one action.
+export const SYSTEM = `You supervise one unattended coding agent. Pick exactly one action.
 
-Reply with a single JSON object and nothing else:
-{"op": "leave" | "nudge" | "declare_done" | "flag", "argument": "<one sentence>", "confidence": <0..1>}
+Reply with one JSON object and nothing else:
+{"op": "leave"|"nudge"|"declare_done"|"flag", "argument": "<one sentence>", "confidence": <0..1>}
 
-- leave: the agent is on track; argument is a short reason.
-- nudge: the agent stopped before finishing; argument is the instruction to send it.
-- declare_done: the acceptance criteria are met; argument summarises what was delivered.
-- flag: the situation needs a human or a stronger model; argument names the problem.
+leave: on track; argument = short reason.
+nudge: stopped before finishing; argument = instruction to send it.
+declare_done: criteria met; argument = what was delivered.
+flag: needs a human or stronger model; argument = the problem.
 
-Judge only from the fields given. If the evidence is insufficient to choose an
-action, use flag. Never invent file names or facts not present in the input.`;
+Use only the fields given; if insufficient, flag. Never invent facts.`;
 
 /** Field-per-line so a small model can ground on individual values.
  *
@@ -45,13 +44,15 @@ export function renderInput(input: DecisionInput): string {
  *  with no natural bound; every other field is one line. Beyond this the value is
  *  cut from the front and marked, so the reader knows the evidence is partial.
  *
- *  Derivation: the engine has a 1024-token window and a 401-token static prefix,
- *  so max_new_tokens=96 leaves 527 tokens (~2000 chars at 3.8 chars/token) for the
- *  whole prompt — not for the tail alone. Measured fixed cost: SYSTEM 709 chars,
- *  the one-line field block 370 chars (max 420 over the corpus), ~2 for the
- *  separator. 2000 - 709 - 370 - 2 leaves ~900; 700 keeps the ~30-char truncation
- *  marker inside the budget with margin. Prefill also cost ~1.6ms/char here, so the
- *  shorter budget is the faster one. */
+ *  Derivation: the engine has a 1024-token window and a 333-token static prefix
+ *  (SYSTEM 515 chars + the four tool schemas, measured with the engine's own
+ *  tokenizer), so max_new_tokens=96 leaves 595 tokens (~1900 chars at 3.2
+ *  chars/token) for the whole prompt — not for the tail alone. Measured fixed
+ *  cost: SYSTEM 515 chars, the one-line field block 370 chars (max 420 over the
+ *  corpus), ~2 for the separator. 1900 - 515 - 370 - 2 leaves ~1000; 700 keeps the
+ *  ~30-char truncation marker and the inspector's brief budget inside it with
+ *  margin. Prefill also cost ~1.6ms/char here, so the shorter budget is the faster
+ *  one. */
 export const MAX_TAIL_CHARS = 700;
 
 /** Keep the end of the output: what the agent did last is the evidence, not how
@@ -59,5 +60,10 @@ export const MAX_TAIL_CHARS = 700;
 export function clipTail(tail: string): string {
 	if (tail.length <= MAX_TAIL_CHARS) return tail;
 	const kept = tail.slice(tail.length - MAX_TAIL_CHARS);
-	return `[...truncated ${tail.length - kept.length} chars...]\n${kept}`;
+	// A cut that lands between the halves of a surrogate pair leaves a lone surrogate,
+	// which the engine's tokenizer refuses to encode — the decision would fail, not
+	// just lose a character.
+	const first = kept.charCodeAt(0);
+	const whole = first >= 0xdc00 && first <= 0xdfff ? kept.slice(1) : kept;
+	return `[...truncated ${tail.length - whole.length} chars...]\n${whole}`;
 }

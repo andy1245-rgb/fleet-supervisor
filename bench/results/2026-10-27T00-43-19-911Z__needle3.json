@@ -1,0 +1,60 @@
+{
+	"recordedAt": "2026-10-27T00:43:19.911Z",
+	"model": "needle3",
+	"taskSetSha": "b9765d1a55e18b4e",
+	"n": 22,
+	"ops": {
+		"exactMatch": 0.1364,
+		"perOpRecall": {
+			"nudge": 0,
+			"leave": 0,
+			"flag": 1
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"weights": {
+			"leave": 5,
+			"declare_done": 4,
+			"flag": 2,
+			"nudge": 1
+		},
+		"total": 26,
+		"perTask": 1.1818
+	},
+	"latencyMs": {
+		"p50": 2023,
+		"p95": 3109
+	},
+	"costUsd": {
+		"total": 0,
+		"per1k": 0
+	},
+	"refusals": 22,
+	"coverage": {
+		"sampledPerOp": {
+			"nudge": 12,
+			"leave": 7,
+			"flag": 3
+		},
+		"corpusPerOp": {
+			"flag": 89,
+			"nudge": 406,
+			"leave": 7
+		}
+	},
+	"notes": "cli"
+}

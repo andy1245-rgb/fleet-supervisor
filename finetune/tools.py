@@ -11,6 +11,11 @@ byte-identical to the ones the model was trained against. The docstrings are the
 tool descriptions and are copied verbatim from src/decision/needle_sidecar.py, so
 a tuned archive answers the same surface the sidecar already speaks.
 
+One short sentence per tool is a budget, not a style: four schemas cost 109 tokens
+of JSON Schema boilerplate before a single description is written, and every token
+here is a token the sequence window cannot spend on the pane evidence. What each op
+*means* lives in SYSTEM (src/decision/prompt.ts), which is where the model reads it.
+
     python tools.py          # compact JSON on stdout, for out/tools.json
     python tools.py --pretty # the same object, indented, for reading
 """
@@ -22,22 +27,22 @@ import needle
 
 @needle.tool
 def leave(reason: str):
-    "Agent is on track, no action needed. argument: short reason."
+    "Agent is on track; no action."
 
 
 @needle.tool
 def nudge(message: str):
-    "Agent stopped before finishing. argument: the instruction to send it."
+    "Agent stopped before finishing; send this."
 
 
 @needle.tool
 def declare_done(summary: str):
-    "Agent met its acceptance criteria. argument: what was delivered."
+    "Criteria met; what was delivered."
 
 
 @needle.tool
 def flag(problem: str):
-    "Needs a human or a stronger model. argument: the problem."
+    "Needs a human or stronger model."
 
 
 TOOL_FUNCTIONS = (leave, nudge, declare_done, flag)

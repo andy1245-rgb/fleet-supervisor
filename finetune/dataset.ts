@@ -27,7 +27,12 @@ interface Args {
 	tools: string;
 	valFraction: number;
 	/** Cap on one rendered example in characters: system prompt + tools + state +
-	 *  target. See the README's token budget for how this maps to --max-len. */
+	 *  target. See the README's token budget for how this maps to --max-len.
+	 *  1850 = the 333-token static prefix (1181 chars) plus ~670 chars of state and
+	 *  target, which is what a 512-token window leaves once the prefix is paid for.
+	 *  A smaller cap fits the window better, but the guard in toExample drops a row the
+	 *  moment the reserved worst-case target stops fitting, so 1850 is the tightest
+	 *  cap that keeps every mined point. */
 	maxExampleChars: number;
 	/** Cap on the terminal tail alone, before the query budget is applied. */
 	maxTailChars: number;
@@ -57,7 +62,7 @@ const DEFAULTS: Args = {
 	outDir: "/home/andrew/agentFleet/finetune/out",
 	tools: "/home/andrew/agentFleet/finetune/out/tools.json",
 	valFraction: 0.1,
-	maxExampleChars: 2400,
+	maxExampleChars: 1850,
 	maxTailChars: 900,
 	maxHumanChars: 320,
 	limit: 0,
@@ -84,7 +89,7 @@ function parseArgs(argv: readonly string[]): Args {
 			case "--limit": args.limit = Number(need()); break;
 			case "-h": case "--help":
 				console.log("usage: node dataset.ts [--input path] [--out-dir dir] [--tools path]\n" +
-					"                       [--val-fraction 0.1] [--max-example-chars 2400]\n" +
+					"                       [--val-fraction 0.1] [--max-example-chars 1850]\n" +
 					"                       [--max-tail-chars 900] [--max-human-chars 320] [--limit N]");
 				process.exit(0);
 				break;
@@ -141,11 +146,20 @@ function readPoint(raw: unknown): Point | undefined {
 	};
 }
 
+/** A prefix that never ends between the halves of a surrogate pair. The tokenizer
+ *  refuses to encode a lone surrogate, so a tail cut on an emoji boundary is a row
+ *  the trainer cannot read at all — one mined tail already ends mid-emoji. */
+function cutPrefix(value: string, cap: number): string {
+	const head = value.slice(0, cap);
+	const last = head.charCodeAt(head.length - 1);
+	return last >= 0xd800 && last <= 0xdbff ? head.slice(0, -1) : head;
+}
+
 /** The terminal tail: the agent's own output, plus any mined tool calls. */
 function renderTail(point: Point, cap: number): string {
 	const lines = [point.assistantText, point.toolCalls].filter((line) => line.length > 0);
 	const joined = lines.join("\n") || "(empty)";
-	return joined.length <= cap ? joined : `${joined.slice(0, cap)}…`;
+	return joined.length <= cap ? joined : `${cutPrefix(joined, cap)}…`;
 }
 
 /** Characters the state block spends before the instruction and the tail. */
@@ -159,7 +173,7 @@ function decisionInput(point: Point, tail: string, humanCap: number): DecisionIn
 		cwd: point.cwd,
 		status: point.humanText ? "working" : "idle",
 		title: "",
-		intent: point.humanText.length <= humanCap ? point.humanText : `${point.humanText.slice(0, humanCap)}…`,
+		intent: point.humanText.length <= humanCap ? point.humanText : `${cutPrefix(point.humanText, humanCap)}…`,
 		phase: "",
 		claimState: "",
 		last: "",
@@ -175,7 +189,7 @@ function firstSentence(value: string, cap: number): string {
 	const stop = value.search(/[.!?](\s|$)/u);
 	const head = stop === -1 ? value : value.slice(0, stop + 1);
 	if (head.length <= cap) return head;
-	const cut = head.slice(0, cap);
+	const cut = cutPrefix(head, cap);
 	const space = cut.lastIndexOf(" ");
 	return (space > cap * 0.6 ? cut.slice(0, space) : cut).trimEnd();
 }
