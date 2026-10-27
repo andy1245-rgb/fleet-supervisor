@@ -93,8 +93,10 @@ export function scanTriggers(
 		}
 	}
 
-	// 2. Collision: two or more working agents in the same tree.
-	for (const [tree, members] of collisions(agents)) {
+	// 2. Collision: two or more working agents in the same tree. The claims map is
+	//    what carries a declared `group` label, so passing it is what makes the
+	//    label outrank the cwd-derived bucket in production and not only in a test.
+	for (const [tree, members] of collisions(agents, claims)) {
 		triggers.push({
 			kind: "collision",
 			group: groupOf(members[0] as HerdrAgent, claims.get((members[0] as HerdrAgent).paneId)),

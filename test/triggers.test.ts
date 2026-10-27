@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 import { test } from "node:test";
 import { scanTriggers } from "../src/manager/triggers.ts";
 import type { ClaimHistory, Trigger, TriggerOptions } from "../src/manager/triggers.ts";
@@ -181,7 +182,35 @@ test("collision triggers come from same-tree working agents", () => {
 	const collision = first(kinds(scan.triggers, "collision"));
 	assert.deepEqual(collision.paneIds, ["p1", "p2"]);
 	assert.equal(collision.group, "repo");
-	assert.equal(collision.detail, `2 agents working in ${TREE}`);
+	assert.equal(collision.detail, "2 agents working in repo");
+});
+
+test("a declared group label collides two working agents in different trees, and $HOME still collides nothing", () => {
+	// The declared label is the operator's own statement that these panes share a
+	// tree, so it outranks the cwd bucket. This goes through the scan rather than
+	// `collisions` directly because the bug it guards was the scan dropping the
+	// claims map: the label path worked for every caller except the real one.
+	const apart = [
+		agent("p1", { status: "working", foregroundCwd: "/w/alpha", cwd: "/w/alpha" }),
+		agent("p2", { status: "working", foregroundCwd: "/w/beta", cwd: "/w/beta" }),
+	];
+	const labelled = claimsOf(["p1", claim("p1", { group: "shared" })], ["p2", claim("p2", { group: "shared" })]);
+
+	const shared = first(kinds(scanTriggers(apart, labelled, ticks(), past(), OPTIONS).triggers, "collision"));
+	assert.deepEqual(shared.paneIds, ["p1", "p2"]);
+	assert.equal(shared.group, "shared");
+	assert.equal(shared.detail, "2 agents working in shared");
+
+	// Without the label the same two panes are two unrelated repos.
+	assert.deepEqual(kinds(scanTriggers(apart, claimsOf(), ticks(), past(), OPTIONS).triggers, "collision"), []);
+
+	// Over half a real fleet lives in a home directory; that is not shared work.
+	const home = homedir();
+	const atHome = [
+		agent("p1", { status: "working", foregroundCwd: home, cwd: home }),
+		agent("p2", { status: "working", foregroundCwd: home, cwd: home }),
+	];
+	assert.deepEqual(kinds(scanTriggers(atHome, claimsOf(), ticks(), past(), OPTIONS).triggers, "collision"), []);
 });
 
 test("no collision when only one of two same-tree agents is working", () => {
