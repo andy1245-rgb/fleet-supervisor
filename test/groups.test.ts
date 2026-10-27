@@ -133,69 +133,148 @@ test("groupAll of an empty fleet is empty", () => {
 	assert.deepEqual(groupAll([], none(), HOME), []);
 });
 
-test("two working agents in the same foregroundCwd collide", () => {
-	const found = collisions([
-		agent("p1", { status: "working", foregroundCwd: "/w/repo" }),
-		agent("p2", { status: "working", foregroundCwd: "/w/repo" }),
-	]);
+test("two working agents in the same repo collide", () => {
+	const found = collisions(
+		[
+			agent("p1", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+			agent("p2", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+		],
+		none(),
+		HOME,
+	);
 
 	assert.equal(found.size, 1);
-	const members = found.get(resolve("/w/repo"));
-	assert.ok(members, "expected a bucket for /w/repo");
+	const members = found.get("repo");
+	assert.ok(members, "expected a collision bucket named after the repo");
 	assert.deepEqual(
 		members.map((m) => m.paneId),
 		["p1", "p2"],
 	);
 });
 
-test("one working and one idle agent in the same tree do not collide", () => {
-	const found = collisions([
-		agent("p1", { status: "working", foregroundCwd: "/w/repo" }),
-		agent("p2", { status: "idle", foregroundCwd: "/w/repo" }),
+test("agents working in a home directory never collide, however many there are", () => {
+	const atHome = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"].map((paneId) =>
+		agent(paneId, { status: "working", cwd: HOME, foregroundCwd: HOME }),
+	);
+
+	assert.equal(collisions(atHome, none(), HOME).size, 0);
+	assert.equal(collisions(atHome).size, 0, "and with the real homedir default too");
+});
+
+test("agents with no path of their own never collide", () => {
+	const lost = ["p1", "p2"].map((paneId) => agent(paneId, { status: "working", cwd: "", foregroundCwd: " " }));
+
+	assert.equal(collisions(lost, none(), HOME).size, 0);
+});
+
+test("two working agents sharing a declared group label collide even when their cwds differ", () => {
+	const agents = [
+		agent("p1", { status: "working", foregroundCwd: "/w/alpha", cwd: "/w/alpha" }),
+		agent("p2", { status: "working", foregroundCwd: "/w/beta", cwd: "/w/beta" }),
+	];
+	const claims = new Map<string, Claim>([
+		["p1", claim("p1", { group: "shared" })],
+		["p2", claim("p2", { group: "shared" })],
 	]);
+
+	const found = collisions(agents, claims, HOME);
+
+	assert.deepEqual([...found.keys()], ["shared"]);
+	assert.deepEqual(
+		found.get("shared")?.map((m) => m.paneId),
+		["p1", "p2"],
+	);
+	assert.equal(collisions(agents, none(), HOME).size, 0, "without the label they are two unrelated repos");
+});
+
+test("a declared label outranks the home bucket, so a labelled pair in $HOME can collide", () => {
+	const agents = [
+		agent("p1", { status: "working", cwd: HOME, foregroundCwd: HOME }),
+		agent("p2", { status: "working", cwd: HOME, foregroundCwd: HOME }),
+	];
+	const claims = new Map<string, Claim>([
+		["p1", claim("p1", { group: "notes" })],
+		["p2", claim("p2", { group: "notes" })],
+	]);
+
+	assert.deepEqual([...collisions(agents, claims, HOME).keys()], ["notes"]);
+});
+
+test("one working and one idle agent in the same group do not collide", () => {
+	const found = collisions(
+		[
+			agent("p1", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+			agent("p2", { status: "idle", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+		],
+		none(),
+		HOME,
+	);
 
 	assert.equal(found.size, 0);
 });
 
-test("two working agents in different trees do not collide", () => {
-	const found = collisions([
-		agent("p1", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
-		agent("p2", { status: "working", foregroundCwd: "/w/other", cwd: "/w/other" }),
-	]);
+test("two working agents in different repos do not collide", () => {
+	const found = collisions(
+		[
+			agent("p1", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+			agent("p2", { status: "working", foregroundCwd: "/w/other", cwd: "/w/other" }),
+		],
+		none(),
+		HOME,
+	);
 
 	assert.equal(found.size, 0);
 });
 
-test("collision buckets follow the resolved path and the cwd fallback", () => {
+test("a home neighbour does not collide with a repo neighbour", () => {
+	const found = collisions(
+		[
+			agent("p1", { status: "working", cwd: HOME, foregroundCwd: HOME }),
+			agent("p2", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" }),
+			agent("p3", { status: "working", cwd: HOME, foregroundCwd: HOME }),
+		],
+		none(),
+		HOME,
+	);
+
+	assert.equal(found.size, 0);
+});
+
+test("collision buckets follow the cwd fallback and the nested basename", () => {
 	const one = agent("p1", { status: "working", foregroundCwd: "/w/repo", cwd: "/w/repo" });
 	const messy = agent("p2", { status: "working", foregroundCwd: "/w/other/../repo", cwd: "/w/other/../repo" });
 	const noForeground = agent("p3", { status: "working", foregroundCwd: "", cwd: "/w/repo" });
 
-	const byResolve = collisions([one, messy]);
-	assert.equal(byResolve.size, 1);
 	assert.deepEqual(
-		byResolve.get(resolve("/w/repo"))?.map((m) => m.paneId),
+		collisions([one, messy], none(), HOME).get("repo")?.map((m) => m.paneId),
 		["p1", "p2"],
 	);
-
-	const byFallback = collisions([one, noForeground]);
-	assert.equal(byFallback.size, 1);
 	assert.deepEqual(
-		byFallback.get(resolve("/w/repo"))?.map((m) => m.paneId),
+		collisions([one, noForeground], none(), HOME).get("repo")?.map((m) => m.paneId),
 		["p1", "p3"],
 	);
+
+	const nested = [
+		agent("p4", { status: "working", foregroundCwd: NESTED, cwd: NESTED }),
+		agent("p5", { status: "working", foregroundCwd: NESTED, cwd: NESTED }),
+	];
+	assert.deepEqual([...collisions(nested, none(), HOME).keys()], ["fleet"]);
 });
 
-test("collision keys are the resolved tree, not the group name", () => {
-	const found = collisions([
-		agent("p1", { status: "working", foregroundCwd: NESTED, cwd: NESTED }),
-		agent("p2", { status: "working", foregroundCwd: NESTED, cwd: NESTED }),
-	]);
+test("a home-heavy fleet collides only where two agents share a repo", () => {
+	const agents = [
+		...["h1", "h2", "h3", "h4", "h5"].map((paneId) => agent(paneId, { status: "working", cwd: HOME, foregroundCwd: HOME })),
+		agent("r1", { status: "working", foregroundCwd: REPO, cwd: REPO }),
+		agent("r2", { status: "working", foregroundCwd: REPO, cwd: REPO }),
+		agent("o1", { status: "working", foregroundCwd: "/w/other", cwd: "/w/other" }),
+	];
 
+	const found = collisions(agents, none(), HOME);
+
+	assert.deepEqual([...found.keys()], ["agentFleet"]);
+	assert.equal(found.size, 1, "five agents in $HOME must not manufacture a trigger");
 	assert.deepEqual(
-		[...found.keys()],
-		[resolve(NESTED)],
+		found.get("agentFleet")?.map((m) => m.paneId),
+		["r1", "r2"],
 	);
-	assert.equal([...found.keys()][0], `${REPO}/src/fleet`);
-	assert.equal(basename(resolve(NESTED)), "fleet");
 });

@@ -84,30 +84,71 @@ function severities(forks: readonly Fork[]): string[] {
 	return forks.map((fork) => fork.severity);
 }
 
-// ---------------------------------------------------------------- disagreement
+// ------------------------------------------------------------------ the trail
+//
+// The ladder's trail is an input to the gate and no longer a fork. A refusal is
+// reported as `flag`, so any comparison of the trail's ends would fire on every
+// escalation behind the shipped `needle3` primary (22/22 refusals) and hold every
+// actionable decision under the default `fork` policy.
 
-test("a single model in the trail is not a disagreement", () => {
+const REFUSAL = decision({ op: "flag", model: "needle3", refused: true, confidence: 0.03, argument: "not enough evidence" });
+const ANSWER = decision({ op: "nudge", model: "escalator", refused: false, argument: "run the failing file" });
+
+function escalated(second: Decision, overrides: Partial<AskInput> = {}): AskInput {
+	return input({ op: second.op, trail: [REFUSAL, second], ...overrides });
+}
+
+test("a single model in the trail is not a fork", () => {
 	assert.deepEqual(detectFork(input()), []);
 });
 
-test("escalating to the same op is not a disagreement", () => {
+test("escalating to the same op is not a fork", () => {
 	const forks = detectFork(input({ trail: [decision(), decision({ model: "escalator", op: "nudge" })] }));
 
 	assert.deepEqual(forks, []);
 });
 
-test("escalating to a different op is a hard disagreement", () => {
+test("escalating to a different op is not a fork either", () => {
 	const forks = detectFork(input({ trail: [decision({ op: "nudge" }), decision({ model: "escalator", op: "flag" })] }));
 
-	assert.equal(forks.length, 1);
-	assert.deepEqual(severities(forks), ["hard"]);
-	assert.match(reasons(forks), /primary chose nudge, escalator chose flag/);
+	assert.deepEqual(forks, [], "two models disagreeing is a ladder fact, not a risk property of the action");
 });
 
-test("a disagreement is read from the ends of the trail", () => {
-	const forks = detectFork(input({ trail: [decision({ op: "nudge" }), decision({ op: "nudge" }), decision({ op: "declare_done" })] }));
+test("a refusing primary plus an actionable escalator is not a fork", () => {
+	assert.deepEqual(detectFork(escalated(ANSWER)), []);
+});
 
-	assert.match(reasons(forks), /escalator chose declare_done/);
+test("the trail is read from neither end: a three-entry trail is still not a fork", () => {
+	const forks = detectFork(
+		input({
+			op: "declare_done",
+			argument: "acceptance met",
+			trail: [decision({ op: "leave" }), decision({ op: "nudge" }), decision({ op: "declare_done" })],
+		}),
+	);
+
+	assert.deepEqual(
+		forks.map((fork) => fork.reason),
+		["declare_done stops a live agent and cannot be silently undone"],
+	);
+});
+
+test("no fork reports a ladder disagreement, and a fork is only a reason and a severity", () => {
+	const battery = [
+		input(),
+		escalated(ANSWER),
+		input({ trail: [decision({ op: "nudge" }), decision({ model: "escalator", op: "leave" })] }),
+		input({ op: "declare_done", argument: "acceptance met", trail: [REFUSAL, decision({ op: "declare_done" })] }),
+		input({ argument: "edit /etc/passwd", trail: [REFUSAL, ANSWER] }),
+		input({ triggers: triggersOf(["collision", ["w2C:p1", "w2C:p2"]]), trail: [REFUSAL, ANSWER] }),
+	];
+
+	for (const context of battery) {
+		for (const fork of detectFork(context)) {
+			assert.doesNotMatch(fork.reason, /disagree|primary chose|escalator chose/, fork.reason);
+			assert.deepEqual(Object.keys(fork).sort(), ["reason", "severity"], "the exported Fork carries no ladder kind");
+		}
+	}
 });
 
 // ---------------------------------------------------------------- irreversible
@@ -276,6 +317,52 @@ test("fork does not ask when nothing is contested", () => {
 
 	assert.equal(gate.ask, false);
 	assert.equal(gate.why, "no fork");
+	assert.deepEqual(gate.forks, []);
+});
+
+test("a refusing primary behind an actionable escalator still acts under fork", () => {
+	const context = escalated(ANSWER);
+	const gate = shouldAsk("fork", context);
+
+	assert.equal(gate.ask, false, "the shipped defaults must not turn every escalation into a hold");
+	assert.equal(gate.why, "no fork");
+	assert.deepEqual(gate.forks, []);
+});
+
+test("fork still holds an irreversible action behind a refusing primary", () => {
+	const gate = shouldAsk("fork", escalated(decision({ op: "declare_done", model: "escalator", argument: "acceptance met" })));
+
+	assert.equal(gate.ask, true);
+	assert.match(gate.why, /^hard fork: declare_done stops a live agent/);
+});
+
+test("fork still holds a cross-agent action behind a refusing primary", () => {
+	const gate = shouldAsk("fork", escalated(ANSWER, { triggers: triggersOf(["collision", ["w2C:p1", "w2C:p2"]]) }));
+
+	assert.equal(gate.ask, true);
+	assert.match(gate.why, /^hard fork: collision in repo/);
+});
+
+test("never still never asks, even when the ladder disagreed and the action is irreversible", () => {
+	const gate = shouldAsk("never", escalated(decision({ op: "declare_done", model: "escalator", argument: "acceptance met" })));
+
+	assert.equal(gate.ask, false);
+	assert.match(gate.why, /policy never/);
+	assert.equal(gate.forks.length, 1);
+});
+
+test("often holds a soft fork and still ignores the trail", () => {
+	const soft = shouldAsk("often", escalated(ANSWER, { argument: "edit /etc/hosts" }));
+
+	assert.equal(soft.ask, true);
+	assert.match(soft.why, /^soft fork: .*\/etc\/hosts/);
+});
+
+test("always is unchanged by a two-model trail", () => {
+	const gate = shouldAsk("always", escalated(ANSWER));
+
+	assert.equal(gate.ask, true);
+	assert.match(gate.why, /every action/);
 	assert.deepEqual(gate.forks, []);
 });
 

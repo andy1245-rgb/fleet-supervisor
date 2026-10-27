@@ -2,10 +2,22 @@
 // a policy, so it is computed here from the policy and the facts the tick already
 // holds — never by a hardcoded rule buried in the action path.
 //
-// A *fork* is a concrete reason not to act unilaterally: the two decision models
-// disagreed, the action cannot be undone, it has consequences outside this pane,
-// the nudge redirects the agent out of its own tree, or the tick is already at
-// its prompt cap. Policies differ only in which severities they care about.
+// A *fork* is a concrete reason not to act unilaterally: the action cannot be
+// undone, it has consequences outside this pane, the nudge redirects the agent
+// out of its own tree, or the tick is already at its prompt cap. Policies differ
+// only in which severities they care about.
+//
+// There is deliberately no "the ladder's two models disagreed" fork. A fork has
+// to mean two defensible readings of the same state, and a refusing primary
+// produces no reading at all: a refusal is a routing fact about the ladder, not a
+// risk property of the decision. Comparing `trail[0].op` against `trail[last].op`
+// made a refusal look like an opinion, and because a refusal is reported as `flag`
+// the shipped primary (`needle3`, 22/22 refusals) disagreed with its escalator on
+// every actionable decision — under the default `fork` policy that held every one
+// of them, so the supervisor never acted by itself. What a refusal costs is
+// already recorded where it belongs: `Decision.refused` on the trail entry and
+// `escalationFailed` on the ladder result. The predicate is deleted, not tuned: a
+// refusal-vs-answer pair is not evidence of ambiguity no matter how it is spelled.
 //
 // Pure by construction: no fs, no fetch, no clock. Every input is an argument, so
 // the gate is testable without a fleet, and `askId` is deterministic for a seed.
@@ -48,7 +60,9 @@ export interface AskInput {
 	cwd: string;
 	/** Home, so `~/…` in a nudge resolves to a real path instead of a guess. */
 	home?: string;
-	/** Ladder trail. Two entries means the escalator was consulted. */
+	/** Ladder trail. Two entries means the escalator was consulted. Carried
+	 *  because the gate is handed the tick's facts as they are, but no fork is
+	 *  derived from it — see the header on why a disagreement is not a risk. */
 	trail: readonly Decision[];
 	/** This tick's cross-agent triggers. */
 	triggers: readonly Trigger[];
@@ -98,16 +112,14 @@ function escapesTree(cwd: string, home: string | undefined, token: string): bool
 	return !insideTree(cwd, isAbsolute(target) ? target : resolve(cwd, target));
 }
 
-/** Every contested reason to hold this action. Empty means nothing is contested. */
+/** Every contested reason to hold this action. Empty means nothing is contested.
+ *  The four predicates are the whole table: irreversible, cross-agent,
+ *  scope-change, at-cap. */
 export function detectFork(args: AskInput): Fork[] {
 	const forks: Fork[] = [];
 
-	// a. disagreement — the ladder escalated and the two models chose differently.
-	const first = args.trail[0];
-	const last = args.trail.length > 1 ? args.trail[args.trail.length - 1] : undefined;
-	if (first !== undefined && last !== undefined && first.op !== last.op) {
-		forks.push({ reason: `primary chose ${first.op}, escalator chose ${last.op}`, severity: "hard" });
-	}
+	// a. There is no disagreement predicate. A refusal is not an opinion, so the
+	//    trail cannot produce a fork; the header states the case.
 
 	// b. irreversible — a done claim tells a live agent to stop.
 	if (args.op === "declare_done") {

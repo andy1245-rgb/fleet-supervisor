@@ -1,8 +1,12 @@
-// Grouping decides what an inspector can be scoped to. Two agents in the same
-// repo can collide over the same files; two agents in $HOME have nothing in
-// common. So cwd is the default bucket, a declared label overrides it, and the
-// home directory is explicitly *not* a group — over half a real fleet lives
-// there and would otherwise collapse into one meaningless bucket.
+// Grouping decides what an inspector can be scoped to, and what counts as two
+// agents working on the same thing. Two agents in the same repo can collide over
+// the same files; two agents in $HOME have nothing in common. So cwd is the
+// default bucket, a declared label overrides it, and the home directory is
+// explicitly *not* a group — over half a real fleet lives there and would
+// otherwise collapse into one meaningless bucket.
+//
+// Collisions use those same buckets rather than the raw path, for the same
+// reason: a shared home directory is not shared work.
 
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
@@ -47,19 +51,32 @@ export function groupAll(agents: HerdrAgent[], claims: Map<string, Claim>, home 
 		.sort((a, b) => b.agents.length - a.agents.length || a.group.localeCompare(b.group));
 }
 
-/** Agents that are actively writing to the same tree. This is the collision
- *  signal: cwd equality is the cheapest proxy for "about to stomp each other". */
-export function collisions(agents: HerdrAgent[]): Map<string, HerdrAgent[]> {
-	const byTree = new Map<string, HerdrAgent[]>();
+/** Agents that are actively working on the same thing, keyed by the bucket the
+ *  supervisor already groups by.
+ *
+ *  The key is `groupOf`, not the resolved cwd. cwd equality was the old proxy for
+ *  "about to stomp each other" and it was wrong in the one case that dominates a
+ *  real fleet: agents sharing a home directory are in different repos under a
+ *  parent directory, so keying on the path made "two agents are working and one
+ *  of them is in $HOME" a collision. The `"home"` and `"unknown"` buckets are
+ *  therefore never collisions — they are the buckets that exist *because* the
+ *  path identified no group.
+ *
+ *  A declared `group` label is a collision even when the cwds differ: the label is
+ *  the operator's own statement that these panes share a tree, and it outranks
+ *  anything derived from a path. Both members must still be genuinely `working`. */
+export function collisions(agents: HerdrAgent[], claims: Map<string, Claim> = new Map(), home = homedir()): Map<string, HerdrAgent[]> {
+	const byGroup = new Map<string, HerdrAgent[]>();
 	for (const agent of agents) {
 		if (agent.status !== "working") continue;
-		const tree = resolve(agent.foregroundCwd || agent.cwd);
-		const list = byTree.get(tree);
+		const group = groupOf(agent, claims.get(agent.paneId), home);
+		if (group === "home" || group === "unknown") continue;
+		const list = byGroup.get(group);
 		if (list) list.push(agent);
-		else byTree.set(tree, [agent]);
+		else byGroup.set(group, [agent]);
 	}
-	for (const [tree, members] of byTree) {
-		if (members.length < 2) byTree.delete(tree);
+	for (const [group, members] of byGroup) {
+		if (members.length < 2) byGroup.delete(group);
 	}
-	return byTree;
+	return byGroup;
 }

@@ -14,8 +14,9 @@
 //
 // Policies (`AskPolicy` in ./ask.ts):
 //   never  — act, then report. The operator sees every action after the fact.
-//   fork   — ask on a hard fork only: the models disagreed, the action kills a
-//            live agent, or it reaches beyond this pane.
+//   fork   — ask on a hard fork only: the action kills a live agent, or it
+//            reaches beyond this pane. A model disagreement is deliberately not
+//            a fork — a refusal is not an opinion (see ./ask.ts).
 //   often  — ask on any fork, soft ones included: the tick is at its prompt cap,
 //            or the nudge is long / names a path outside the agent's tree.
 //   always — ask on every non-`leave` decision.
