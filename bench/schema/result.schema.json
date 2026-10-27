@@ -28,13 +28,24 @@
 		},
 		"regret": {
 			"type": "object",
-			"description": "Cost-weighted score. Weights are graded by consequence, not by disagreement: leaving a stalled agent alone is the expensive mistake, escalating is merely wasteful.",
+			"description": "Cost-weighted score. Weights are graded by consequence, not by disagreement: abandoning an agent that needed action is the expensive mistake, escalating it is merely wasteful.",
 			"required": ["total", "perTask"],
 			"properties": {
 				"weights": { "type": "object", "additionalProperties": { "type": "number" } },
 				"total": { "type": "number" },
 				"perTask": { "type": "number" }
 			}
+		},
+		"baselines": {
+			"type": "object",
+			"description": "The four constant policies scored on this record's own rows. The floor a model has to clear before its accuracy means anything: a record whose ops.exactMatch sits under baselines.alwaysNudge has not demonstrated signal. Absent from records written before the baselines were added.",
+			"properties": {
+				"alwaysLeave": { "$ref": "#/$defs/baselineScore" },
+				"alwaysNudge": { "$ref": "#/$defs/baselineScore" },
+				"alwaysDeclareDone": { "$ref": "#/$defs/baselineScore" },
+				"alwaysFlag": { "$ref": "#/$defs/baselineScore" }
+			},
+			"additionalProperties": false
 		},
 		"latencyMs": {
 			"type": "object",
@@ -55,5 +66,17 @@
 			}
 		},
 		"notes": { "type": "string" }
+	},
+	"$defs": {
+		"baselineScore": {
+			"type": "object",
+			"description": "One constant policy's score over the record's rows.",
+			"required": ["exactMatch", "regretPerTask"],
+			"properties": {
+				"exactMatch": { "type": "number" },
+				"regretPerTask": { "type": "number" }
+			},
+			"additionalProperties": false
+		}
 	}
 }

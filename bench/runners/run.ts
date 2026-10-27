@@ -21,21 +21,101 @@ export interface Task {
 	humanText: string;
 }
 
-/** Regret in arbitrary units: what a wrong op actually costs.
- *  The asymmetry is the point — a false "leave" strands a working agent, while a
- *  false "flag" only buys an escalator call. */
-export const REGRET: Record<Op, Record<Exclude<Op, "leave">, number>> = {
-	leave: { nudge: 5, declare_done: 4, flag: 2 },
-	nudge: { nudge: 0, declare_done: 4, flag: 1 },
-	declare_done: { nudge: 5, declare_done: 0, flag: 2 },
-	flag: { nudge: 1, declare_done: 1, flag: 0 },
+/** Regret in arbitrary units: what a wrong op actually costs. Expected op picks
+ *  the row, predicted op the column, so every row is square and every cell is
+ *  priced — a prediction of `leave` against any other expectation is a cost like
+ *  any other, not a free guess.
+ *
+ *  The asymmetry is the point. The `leave` column is the abandon column, and it
+ *  is the most expensive thing in the matrix on the two rows that owed action:
+ *  `nudge` and `flag` at 6, because the agent was mid-work and sat there instead,
+ *  which loses the whole cycle it was running. `declare_done` abandoned is one
+ *  cheaper at 5 — that turn had already reported itself finished, so the loss is
+ *  a stale claim rather than a stalled pane. The `leave` row keeps its old
+ *  weights (5/4/2): nudging or flagging a rested agent buys a wasted turn, and
+ *  nudging one that had already finished is worse than flagging it because a
+ *  nudge makes it work again. Correct pairs are 0 by construction and are the
+ *  only free cells in the table. */
+export const REGRET: Record<Op, Record<Op, number>> = {
+	leave: { leave: 0, nudge: 5, declare_done: 4, flag: 2 },
+	nudge: { leave: 6, nudge: 0, declare_done: 4, flag: 1 },
+	declare_done: { leave: 5, nudge: 5, declare_done: 0, flag: 2 },
+	flag: { leave: 6, nudge: 1, declare_done: 1, flag: 0 },
 };
 
+/** The matrix is total over `Op × Op`, so this reads a cell and nothing else:
+ *  there is no pair without a price and no fallback that could turn an absent
+ *  cell into a silent zero. */
 export function regretOf(expected: Op, predicted: Op): number {
-	if (expected === predicted) return 0;
-	if (expected === "leave") return (REGRET.leave as Record<string, number>)[predicted] ?? 0;
-	const row = REGRET[expected] as Record<string, number>;
-	return row[predicted] ?? 0;
+	return REGRET[expected][predicted];
+}
+
+export interface BaselineScore {
+	exactMatch: number;
+	regretPerTask: number;
+}
+
+/** The four constant policies on the same rows as the model. Accuracy without
+ *  these is unanchored: a model that lands under `alwaysNudge` has measured
+ *  nothing about the corpus, and the record should say so. */
+export interface BaselineBlock {
+	alwaysLeave: BaselineScore;
+	alwaysNudge: BaselineScore;
+	alwaysDeclareDone: BaselineScore;
+	alwaysFlag: BaselineScore;
+}
+
+interface BaselinePolicy {
+	name: string;
+	op: Op;
+	key: keyof BaselineBlock;
+}
+
+const BASELINES: readonly BaselinePolicy[] = [
+	{ name: "baseline:always-leave", op: "leave", key: "alwaysLeave" },
+	{ name: "baseline:always-nudge", op: "nudge", key: "alwaysNudge" },
+	{ name: "baseline:always-declare_done", op: "declare_done", key: "alwaysDeclareDone" },
+	{ name: "baseline:always-flag", op: "flag", key: "alwaysFlag" },
+];
+
+/** Confidence 1 because a constant has nothing to be unsure about; cost 0 because
+ *  no model was called. `latencyMs` 0 for the same reason. */
+function constantDecision(name: string, op: Op): Decision {
+	return { op, argument: `constant baseline: always ${op}`, confidence: 1, model: name, costUsd: 0, latencyMs: 0, refused: false, raw: JSON.stringify({ op, argument: "", confidence: 1 }) };
+}
+
+/** The floors, as models: score them through `score()` and you get back exactly
+ *  the `baselines` block a record carries. */
+export function baselineModels(): DecisionModel[] {
+	return BASELINES.map((policy) => ({
+		name: policy.name,
+		costPerCallUsd: 0,
+		decide: async (): Promise<Decision> => constantDecision(policy.name, policy.op),
+	}));
+}
+
+/** Same rows, same matrix, same rounding as `score()` — the block is that
+ *  function's answer for each constant policy, computed in one pass so a record
+ *  stays self-anchoring without a second read of the corpus. */
+function baselineBlock(tasks: readonly Task[]): BaselineBlock {
+	const block: BaselineBlock = {
+		alwaysLeave: { exactMatch: 0, regretPerTask: 0 },
+		alwaysNudge: { exactMatch: 0, regretPerTask: 0 },
+		alwaysDeclareDone: { exactMatch: 0, regretPerTask: 0 },
+		alwaysFlag: { exactMatch: 0, regretPerTask: 0 },
+	};
+	for (const policy of BASELINES) {
+		const decision = constantDecision(policy.name, policy.op);
+		let hits = 0;
+		let regret = 0;
+		for (const task of tasks) {
+			if (task.expectedOp === decision.op) hits += 1;
+			regret += regretOf(task.expectedOp, decision.op);
+		}
+		const n = Math.max(1, tasks.length);
+		block[policy.key] = { exactMatch: Number((hits / n).toFixed(4)), regretPerTask: Number((regret / n).toFixed(4)) };
+	}
+	return block;
 }
 
 function percentile(values: number[], p: number): number {
@@ -53,6 +133,9 @@ export interface BenchRecord {
 	ops: { exactMatch: number; perOpRecall: Record<string, number> };
 	selective: { coverageAtThreshold: Record<string, number>; accuracyAtCoverage: Record<string, number> };
 	regret: { weights: Record<string, number>; total: number; perTask: number };
+	/** The constant policies on this record's own rows. Optional because every
+	 *  record written before the block existed has no baselines to report. */
+	baselines?: BaselineBlock;
 	latencyMs: { p50: number; p95: number };
 	costUsd: { total: number; per1k: number };
 	refusals: number;
@@ -112,6 +195,7 @@ export function score(model: string, tasks: Task[], decisions: Decision[], taskS
 		ops: { exactMatch: Number((correct / Math.max(1, tasks.length)).toFixed(4)), perOpRecall },
 		selective: { coverageAtThreshold, accuracyAtCoverage },
 		regret: { weights: { leave: 5, declare_done: 4, flag: 2, nudge: 1 }, total: regretTotal, perTask: Number((regretTotal / Math.max(1, tasks.length)).toFixed(4)) },
+		baselines: baselineBlock(tasks),
 		latencyMs: { p50: percentile(latency, 50), p95: percentile(latency, 95) },
 		costUsd: { total: Number(cost.toFixed(6)), per1k: Number(((cost / Math.max(1, tasks.length)) * 1000).toFixed(4)) },
 		refusals,
