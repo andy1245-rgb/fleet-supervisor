@@ -244,8 +244,10 @@ make eval      # score the .cact on out/val.jsonl -> out/eval.json
 ```
 
 `make all` is `train build eval`. `make dry` runs the converter over
-`fixtures/sample-points.jsonl` instead, and `make smoke` scores the published
-base archive on that dry split — both work before the miner has written anything.
+`fixtures/sample-points.jsonl` instead — twelve **synthetic** rows, invented for
+this purpose, so the converter can be exercised without any real session data in
+the tree — and `make smoke` scores the published base archive on that dry split.
+Both work before the miner has written anything.
 
 `make eval` pulls `train` and `build` first if their outputs are missing, so it
 will start a fine-tune; use `make eval CACT=<existing .cact>` or

@@ -2,6 +2,18 @@
 
 A supervisor for a fleet of live agent panes. It observes them through `herdr`, detects which ones actually moved since the last tick, decides one action per moved agent with a cheap decision model that escalates once to a stronger one, holds that action when it is contested, investigates cross-agent trouble with an inspector that only ever reports, acts only through `herdr`, and notifies a phone. It is not a new agent loop and it does not re-implement one: the agents already exist and already run; this decides what, if anything, to say to them next. The whole economics of the thing rest on not looking at an agent that did not move.
 
+## Status
+
+**What was attempted.** A Tier-0 pre-filter: a 20-layer, 121M-parameter local engine (`needle3`) asked to pick one of four ops per moved pane — `leave`, `nudge`, `declare_done`, `flag` — so the expensive model is only paid for the panes the cheap one refuses. Alongside it, a four-variant LoRA fine-tune slate (`d4` / `d8` / `d20` / `triage`) plus `control-d8`, a base checkpoint sliced to 8 layers with no adapter.
+
+**What the benchmark measured.** On the committed n = 22 stratified sample, `needle3` returned **no parseable decision on any row**: 22/22 refusals, `usableOutputRate` 0, `accuracyGivenUsable` undefined at n = 0. Its `exactMatch` 0.1364 and regret 26 (1.1818 per task) are **exactly** the always-flag constant's — every record now carries the four constant baselines, so this is checkable rather than asserted. A trivial always-nudge scores 0.5455 exact match, so the pre-filter is four times worse than a constant that never reads the input. For reference the hosted `z-ai/glm-5.3-flash` scored 0.35 on a different n = 40 subset.
+
+**What the fine-tune changed.** Nothing yet: **0 of 4 variants exist on disk.** A probe of `d4` measured 262.4 s per training step — 126.8 minutes per epoch against a 600 s budget — and was killed after two steps. That probe ran on the **CPU** (`backend cpu float32` in `finetune/out/slate/_probe/d4/probe.log`), not on a GPU, so it bounds the software path rather than the model's trainability. `control-d8` does exist and prices depth: 994 ms p50 at 8 layers against 3776 ms at 20, at 37/40 refusals — cheaper, not better.
+
+**What is out of scope.** `declare_done` has zero targets in the mined corpus, so no variant can learn it and its column is `n/a` everywhere. `leave` has 7 rows corpus-wide, so any 10-point move on it is one row. The regret ranking is not publishable: the cost weights are asserted, unitless and unswept (`weightsSwept: false`). And no decision here has been scored against what a supervised fleet actually did next — the labels are reconstructed from transcripts, so this measures models against proxies.
+
+**The question that decides the next step.** Whether a refusal is the grounding gate withholding a proposal, or the decode producing nothing at all, is still unmeasured for these records: `suppressed` was computed by the sidecar and then discarded until this change began persisting it. The two have opposite fixes, and only the second is a fine-tuning problem.
+
 ## Architecture
 
 ```

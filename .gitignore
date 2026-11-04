@@ -1,6 +1,11 @@
 # Dependencies
 node_modules/
 
+# Secrets. A live API key sat in a tracked corpus file for days; nothing shaped like
+# a credential file should reach the index even by accident.
+.env
+.env.*
+
 # Python: the needle sidecar venv
 .venv/
 __pycache__/
