@@ -3,8 +3,8 @@
 // a design decision that is not backed by a record here is not a decision.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { needleModel } from "../../src/decision/needle.ts";
 import { openRouterModel } from "../../src/decision/openrouter.ts";
@@ -129,16 +129,28 @@ export interface BenchRecord {
 	recordedAt: string;
 	model: string;
 	taskSetSha: string;
+	/** The committed task file the sha names. A sha nothing can be loaded from is
+	 *  not a citation, and a record that cannot be re-scored is not evidence. */
+	taskSetPath?: string;
 	n: number;
 	ops: { exactMatch: number; perOpRecall: Record<string, number> };
 	selective: { coverageAtThreshold: Record<string, number>; accuracyAtCoverage: Record<string, number> };
-	regret: { weights: Record<string, number>; total: number; perTask: number };
+	/** The cost matrix itself, not a per-op price list: read `matrix[expected][predicted]`.
+	 *  The former `weights` field was a mangled row of this matrix presented as
+	 *  per-operation prices, under which always-flag read as 44 instead of its true 26. */
+	regret: { matrix: Record<string, Record<string, number>>; total: number; perTask: number; weightsSwept: boolean };
 	/** The constant policies on this record's own rows. Optional because every
 	 *  record written before the block existed has no baselines to report. */
 	baselines?: BaselineBlock;
 	latencyMs: { p50: number; p95: number };
 	costUsd: { total: number; per1k: number };
 	refusals: number;
+	/** Share of rows on which the model produced a decidable op. When this is 0 the
+	 *  failure is upstream of scoring, and `ops.exactMatch` is not measuring judgement. */
+	usableOutputRate?: number;
+	/** Accuracy over the usable rows only. `value` is null when nothing was usable:
+	 *  with no denominator there is no accuracy to report, and 0 would invent one. */
+	accuracyGivenUsable?: { value: number | null; n: number };
 	/** Rows behind each per-op number: a recall over 7 rows is not the same
 	 *  claim as a recall over 200, and the record should say which it is. */
 	coverage?: { sampledPerOp: Record<string, number>; corpusPerOp: Record<string, number> };
@@ -147,9 +159,11 @@ export interface BenchRecord {
 
 const THRESHOLDS = [0.3, 0.5, 0.7, 0.9];
 
-export function score(model: string, tasks: Task[], decisions: Decision[], taskSetSha: string): BenchRecord {
+export function score(model: string, tasks: Task[], decisions: Decision[], taskSetSha: string, taskSetPath?: string): BenchRecord {
 	let correct = 0;
 	let refusals = 0;
+	let usable = 0;
+	let usableCorrect = 0;
 	let regretTotal = 0;
 	const latency: number[] = [];
 	const cost = decisions.reduce((sum, d) => sum + d.costUsd, 0);
@@ -161,6 +175,10 @@ export function score(model: string, tasks: Task[], decisions: Decision[], taskS
 		if (!decision) continue;
 		latency.push(decision.latencyMs);
 		if (decision.refused) refusals += 1;
+		else {
+			usable += 1;
+			if (decision.op === task.expectedOp) usableCorrect += 1;
+		}
 		if (decision.op === task.expectedOp) correct += 1;
 		regretTotal += regretOf(task.expectedOp, decision.op);
 		expectedCounts.set(task.expectedOp, (expectedCounts.get(task.expectedOp) ?? 0) + 1);
@@ -191,10 +209,13 @@ export function score(model: string, tasks: Task[], decisions: Decision[], taskS
 		recordedAt: new Date().toISOString(),
 		model,
 		taskSetSha,
+		...(taskSetPath ? { taskSetPath } : {}),
 		n: tasks.length,
 		ops: { exactMatch: Number((correct / Math.max(1, tasks.length)).toFixed(4)), perOpRecall },
 		selective: { coverageAtThreshold, accuracyAtCoverage },
-		regret: { weights: { leave: 5, declare_done: 4, flag: 2, nudge: 1 }, total: regretTotal, perTask: Number((regretTotal / Math.max(1, tasks.length)).toFixed(4)) },
+		regret: { matrix: REGRET, total: regretTotal, perTask: Number((regretTotal / Math.max(1, tasks.length)).toFixed(4)), weightsSwept: false },
+		usableOutputRate: Number((usable / Math.max(1, tasks.length)).toFixed(4)),
+		accuracyGivenUsable: usable === 0 ? { value: null, n: 0 } : { value: Number((usableCorrect / usable).toFixed(4)), n: usable },
 		baselines: baselineBlock(tasks),
 		latencyMs: { p50: percentile(latency, 50), p95: percentile(latency, 95) },
 		costUsd: { total: Number(cost.toFixed(6)), per1k: Number(((cost / Math.max(1, tasks.length)) * 1000).toFixed(4)) },
@@ -202,13 +223,13 @@ export function score(model: string, tasks: Task[], decisions: Decision[], taskS
 	};
 }
 
-export function loadTasks(path = join(ROOT, "tasks", "tasks.jsonl")): { tasks: Task[]; sha: string } {
+export function loadTasks(path = join(ROOT, "tasks", "tasks.jsonl")): { tasks: Task[]; sha: string; path: string } {
 	const raw = readFileSync(path, "utf8");
 	const tasks = raw
 		.split("\n")
 		.filter((line) => line.trim())
 		.map((line) => JSON.parse(line) as Task);
-	return { tasks, sha: createHash("sha256").update(raw).digest("hex").slice(0, 16) };
+	return { tasks, sha: createHash("sha256").update(raw).digest("hex").slice(0, 16), path: relative(join(ROOT, ".."), path) };
 }
 
 /** Fixed order for stratification, most expensive mistake first. When seats are
@@ -419,6 +440,13 @@ export interface TaskTrace {
 	costUsd: number;
 	model: string;
 	argument: string;
+	/** Calls the engine's grounding gate withheld. This is the field that separates
+	 *  "grounding suppressed a proposal" from "decoding produced nothing", and the
+	 *  two have opposite fixes: the first needs no fine-tune at all. */
+	suppressed?: number;
+	/** The sidecar's reply, verbatim. Without it a trace cannot be re-scored after
+	 *  the scoring rules change, which is how a refusal became a `flag`. */
+	raw?: string;
 }
 
 export function traceOf(tasks: readonly Task[], decisions: readonly Decision[]): TaskTrace[] {
@@ -436,6 +464,8 @@ export function traceOf(tasks: readonly Task[], decisions: readonly Decision[]):
 			costUsd: decision.costUsd,
 			model: decision.model,
 			argument: decision.argument,
+			...(typeof decision.suppressed === "number" ? { suppressed: decision.suppressed } : {}),
+			raw: decision.raw,
 		});
 	}
 	return traces.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -451,8 +481,27 @@ function buildModel(name: string): DecisionModel {
 	return openRouterModel({ model });
 }
 
-export async function bench(modelName: string, limit?: number, tag = ""): Promise<BenchRecord> {
-	const { tasks, sha } = loadTasks();
+/** Freeze the exact bytes a record is scored against, named by their sha. A record
+ *  whose taskset is only a hash stops being re-scorable the moment the working
+ *  file changes, which is how an unreproducible result gets committed and then
+ *  cited. Writing the snapshot at measure time makes that impossible. */
+/** Freeze the exact bytes a record is scored against, and return the repo-relative
+ *  path of that snapshot. The record must cite the snapshot rather than the working
+ *  file: the working copy is mutable, so citing it means the next corpus edit
+ *  invalidates a record that was correct when it was written — the exact failure the
+ *  provenance test exists to catch, reintroduced by the thing meant to prevent it. */
+function freezeTaskSet(path: string, sha: string): string {
+	const dir = join(ROOT, "tasks");
+	const marker = `.${sha}.jsonl`;
+	const existing = readdirSync(dir).find((name) => name.endsWith(marker));
+	const name = existing ?? `${new Date().toISOString().slice(0, 10)}${marker}`;
+	if (!existing) writeFileSync(join(dir, name), readFileSync(path));
+	return relative(join(ROOT, ".."), join(dir, name));
+}
+
+export async function bench(modelName: string, limit?: number, tag = "", taskset?: string): Promise<BenchRecord> {
+	const taskPath = taskset ? join(ROOT, "..", taskset) : join(ROOT, "tasks", "tasks.jsonl");
+	const { tasks, sha } = loadTasks(taskPath);
 	// Stratified by expectedOp rather than strided: the file is ordered by session,
 	// so a stride samples whatever the file order favours and can miss `leave`
 	// entirely at any small limit.
@@ -463,7 +512,10 @@ export async function bench(modelName: string, limit?: number, tag = ""): Promis
 	for (const task of sample.tasks) {
 		decisions.push(await model.decide(task.input));
 	}
-	const record = score(model.name, sample.tasks, decisions, sha);
+	// Frozen after the measurement, not before: a run that throws mid-loop must not
+	// leave an uncited snapshot behind for the provenance test to trip over.
+	const citedPath = freezeTaskSet(taskPath, sha);
+	const record = score(model.name, sample.tasks, decisions, sha, citedPath);
 	record.coverage = { sampledPerOp: sample.sampledPerOp, corpusPerOp: sample.corpusPerOp };
 	if (tag) record.notes = tag;
 	const stem = `${record.recordedAt.replace(/[:.]/g, "-")}__${model.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
@@ -482,7 +534,8 @@ async function main(): Promise<void> {
 	const modelArg = args.find((a) => !a.startsWith("--")) ?? process.env.AGENTFLEET_BENCH_MODEL ?? "needle3";
 	const limitArg = args.find((a) => a.startsWith("--limit="));
 	const limit = limitArg ? Number(limitArg.split("=")[1]) : undefined;
-	await bench(modelArg, limit, "cli");
+	const tasksetArg = args.find((a) => a.startsWith("--taskset="));
+	await bench(modelArg, limit, "cli", tasksetArg?.split("=")[1]);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

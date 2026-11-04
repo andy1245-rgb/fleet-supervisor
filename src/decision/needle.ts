@@ -277,13 +277,27 @@ export function needleModel(options: NeedleOptions = {}): DecisionModel {
 			const started = Date.now();
 			const reply = await sidecar.request(JSON.stringify({ system: SYSTEM, user: renderInput(input) }));
 			if ("error" in reply) {
-				return parseDecision("", { model: "needle3", costUsd: 0, latencyMs: Date.now() - started });
+				// A sidecar fault is not a model answer. Parsing "" would collapse it into the
+				// same "returned no JSON object" refusal a genuine empty decode produces, which
+				// is the exact ambiguity that decides whether a fine-tune can help at all — a
+				// timed-out engine must not be indistinguishable from a model that declined.
+				return {
+					op: "flag",
+					argument: `sidecar error: ${reply.error}`,
+					confidence: 0,
+					model: "needle3",
+					costUsd: 0,
+					latencyMs: Date.now() - started,
+					refused: true,
+					raw: JSON.stringify({ error: reply.error }),
+				};
 			}
 			const op = isOp(reply.op) ? reply.op : undefined;
 			const confidence = typeof reply.confidence === "number" ? reply.confidence : 0;
 			const argument = typeof reply.argument === "string" ? reply.argument : "";
 			const latencyMs = typeof reply.latency_ms === "number" ? reply.latency_ms : Date.now() - started;
-			const raw = JSON.stringify({ op: reply.op, argument, confidence, reasoning: reply.reasoning });
+			const suppressed = typeof reply.suppressed === "number" ? reply.suppressed : undefined;
+			const raw = JSON.stringify({ op: reply.op, argument, confidence, suppressed, reasoning: reply.reasoning });
 
 			if (!op) {
 				return {
@@ -295,9 +309,10 @@ export function needleModel(options: NeedleOptions = {}): DecisionModel {
 					latencyMs,
 					refused: true,
 					raw,
+					suppressed,
 				};
 			}
-			return { op, argument, confidence, model: "needle3", costUsd: 0, latencyMs, refused: false, raw };
+			return { op, argument, confidence, model: "needle3", costUsd: 0, latencyMs, refused: false, raw, suppressed };
 		},
 
 		close(): void {

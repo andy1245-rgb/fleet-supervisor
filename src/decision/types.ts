@@ -39,6 +39,11 @@ export interface Decision {
 	/** True when the model declined to commit to an op (needle suppresses ungrounded calls). */
 	refused: boolean;
 	raw: string;
+	/** How many calls the engine's grounding gate withheld. A refusal with
+	 *  `suppressed > 0` is a proposal the gate rejected — the model chose an op and
+	 *  was overruled; a refusal with `suppressed === 0` is a decode that produced
+	 *  nothing. Only the second is a fine-tuning problem. */
+	suppressed?: number;
 }
 
 export interface DecisionModel {

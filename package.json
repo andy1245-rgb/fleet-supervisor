@@ -9,6 +9,7 @@
 		"test": "node --test test/*.test.ts",
 		"mine": "node mine/decision-points.ts",
 		"bench": "node bench/runners/run.ts",
+		"rescore": "node bench/runners/rescore.ts",
 		"tick": "node src/manager/tick.ts",
 		"watchdog": "node src/watchdog/rules.ts"
 	},

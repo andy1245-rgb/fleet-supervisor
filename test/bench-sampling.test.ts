@@ -201,6 +201,7 @@ test("a trace names the row, what was expected and what was predicted", () => {
 		costUsd: 0.0001,
 		model: "test-model",
 		argument: "keep going",
+		raw: "{}",
 	});
 });
 

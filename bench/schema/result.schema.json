@@ -8,10 +8,11 @@
 		"recordedAt": { "type": "string" },
 		"model": { "type": "string" },
 		"taskSetSha": { "type": "string", "description": "sha256 of the task file, so records are comparable only against the same labels" },
+		"taskSetPath": { "type": "string", "description": "Repo-relative path of the committed task file this sha names, so the rows behind a record are recoverable and it can be re-scored" },
 		"n": { "type": "integer" },
 		"ops": {
 			"type": "object",
-			"description": "Strict exact-match accuracy over the four ops, plus per-op recall.",
+			"description": "Op-level accuracy, including refusals. A refusal is coerced to `flag` so the ladder can still route it, which means every refused row that expected `flag` scores as a hit — with refusals > 0 these figures are partly refusal-derived and are an accuracy only when usableOutputRate > 0. Read usableOutputRate first; do not quote exactMatch or perOpRecall.flag from a record whose refusals approach its n, because always-flag reproduces them exactly.",
 			"required": ["exactMatch"],
 			"properties": {
 				"exactMatch": { "type": "number" },
@@ -28,12 +29,17 @@
 		},
 		"regret": {
 			"type": "object",
-			"description": "Cost-weighted score. Weights are graded by consequence, not by disagreement: abandoning an agent that needed action is the expensive mistake, escalating it is merely wasteful.",
+			"description": "Cost-weighted score. The price of a wrong answer is read from matrix[expected][predicted] — there is no per-operation price. The costs are asserted and unitless, and a change of 1 to any weight reverses the ranking between variants, so weightsSwept is false and no ranking from this block is publishable until the matrix is swept.",
 			"required": ["total", "perTask"],
 			"properties": {
-				"weights": { "type": "object", "additionalProperties": { "type": "number" } },
+				"matrix": {
+					"type": "object",
+					"description": "The full expected x predicted cost table. Present so a reader can compute any policy's cost without reading the runner.",
+					"additionalProperties": { "type": "object", "additionalProperties": { "type": "number" } }
+				},
 				"total": { "type": "number" },
-				"perTask": { "type": "number" }
+				"perTask": { "type": "number" },
+				"weightsSwept": { "type": "boolean", "description": "False: the weights are asserted rather than fitted, so a variant ranking from them is not yet evidence. Absent from records written before the matrix was published." }
 			}
 		},
 		"baselines": {
@@ -57,6 +63,17 @@
 			"properties": { "total": { "type": "number" }, "per1k": { "type": "number" } }
 		},
 		"refusals": { "type": "integer", "description": "Decisions where the model declined to pick an op. Not an error: a correct refusal routes to the escalator." },
+		"usableOutputRate": { "type": "number", "description": "Share of rows on which the model produced a decidable op. When this is 0 the failure is upstream of scoring and ops.exactMatch is not measuring judgement." },
+		"accuracyGivenUsable": {
+			"type": "object",
+			"description": "Accuracy over usable rows only. value is null when nothing was usable: with no denominator there is no accuracy to report, and 0 would invent one.",
+			"required": ["value", "n"],
+			"properties": {
+				"value": { "type": ["number", "null"] },
+				"n": { "type": "integer" }
+			},
+			"additionalProperties": false
+		},
 		"coverage": {
 			"type": "object",
 			"description": "Row counts behind each per-op number: the sampled subset versus the whole corpus. A recall over 7 rows is not the same claim as a recall over 200.",

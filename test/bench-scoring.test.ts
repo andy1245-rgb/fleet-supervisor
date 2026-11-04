@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { baselineModels, REGRET, regretOf, score } from "../bench/runners/run.ts";
+import { baselineModels, REGRET, regretOf, score, traceOf } from "../bench/runners/run.ts";
+import { compare } from "../bench/runners/rescore.ts";
 import type { BaselineBlock, Task } from "../bench/runners/run.ts";
 import type { Decision, DecisionInput, DecisionModel, Op } from "../src/decision/types.ts";
 import { OPS } from "../src/decision/types.ts";
@@ -150,4 +151,90 @@ test("the record's baselines block is what score() returns for the baseline mode
 		assert.equal(decisions[0]?.model, model.name, "the decision names the model that produced it");
 		assert.equal(decisions[0]?.confidence, 1, "a constant has nothing to be unsure about");
 	}
+});
+
+/** A refusal is coerced to `flag` so the ladder can route it, which means each
+ *  refused row that expected `flag` counts as a correct answer. The refusal count is
+ *  therefore visible inside `ops`, and `usableOutputRate` is what tells a reader
+ *  whether the accuracy means anything. */
+function refusal(model: string, suppressed?: number): Decision {
+	return {
+		op: "flag",
+		argument: "needle declined to call a tool",
+		confidence: 0,
+		model,
+		costUsd: 0,
+		latencyMs: 0,
+		refused: true,
+		raw: "{}",
+		...(typeof suppressed === "number" ? { suppressed } : {}),
+	};
+}
+
+test("a run where nothing is usable reports no usable output and no conditional accuracy", () => {
+	const decisions = TASKS.map(() => refusal("needle3"));
+	const record = score("needle3", TASKS, decisions, SHA);
+
+	assert.equal(record.usableOutputRate, 0, "no row produced a decidable op");
+	assert.deepEqual(
+		record.accuracyGivenUsable,
+		{ value: null, n: 0 },
+		"accuracy conditional on usability is undefined at n=0, and must not be reported as 0",
+	);
+	assert.equal(record.refusals, TASKS.length);
+});
+
+test("usable output rate and conditional accuracy use their own denominators", () => {
+	const half = Math.floor(TASKS.length / 2);
+	const decisions = TASKS.map((task, index) => (index < half ? decision(task.expectedOp, "m") : refusal("m")));
+	const record = score("m", TASKS, decisions, SHA);
+
+	assert.equal(record.usableOutputRate, Number((half / TASKS.length).toFixed(4)), "usable share is over rows offered");
+	const conditional = record.accuracyGivenUsable;
+	assert.ok(conditional, "the block is present when something was usable");
+	assert.equal(conditional.n, half, "the denominator is the usable rows, not every row");
+	assert.equal(conditional.value, 1, "every usable row was answered correctly");
+});
+
+test("a refusal is scored as flag, so a fully refusing run cannot beat the always-flag baseline", () => {
+	const record = score("needle3", TASKS, TASKS.map(() => refusal("needle3")), SHA);
+	const baseline = record.baselines;
+	assert.ok(baseline, "the record carries a baselines block");
+	assert.equal(
+		record.ops.exactMatch,
+		baseline.alwaysFlag.exactMatch,
+		"a run that refuses everything scores exactly the constant, because every flag-expecting row counts as a hit",
+	);
+	assert.equal(
+		record.ops.perOpRecall.flag,
+		1,
+		"and flag recall reads 1.0 while the model produced nothing, which is why usableOutputRate has to be read first",
+	);
+});
+
+test("a suppression count survives onto the trace, so a gate-refusal is not an empty decode", () => {
+	const traces = traceOf(TASKS.slice(0, 2), [refusal("needle3", 2), refusal("needle3", 0)]);
+	assert.equal(traces[0]?.suppressed, 2, "the engine withheld two proposals");
+	assert.equal(traces[1]?.suppressed, 0, "and zero is recorded, not dropped as falsy");
+});
+
+test("a rescore refuses when the task set sha differs, even if every other field agrees", () => {
+	// A corpus that agrees on labels but not on bytes reproduces every aggregate, so
+	// without this check the rescore emits a record citing different data while
+	// claiming to be the same measurement.
+	const decisions = TASKS.map((task) => decision(task.expectedOp, "m"));
+	const base = score("m", TASKS, decisions, SHA);
+	const drifted = { ...base, taskSetSha: "deadbeefdeadbeef" };
+	assert.deepEqual(Object.keys(compare(base, drifted)), ["taskSetSha"]);
+});
+
+test("a rescore ignores key order, so an unsorted corpus does not block a valid emit", () => {
+	const decisions = TASKS.map((task) => decision(task.expectedOp, "m"));
+	const base = score("m", TASKS, decisions, SHA);
+	const reordered = {
+		...base,
+		ops: { exactMatch: base.ops.exactMatch, perOpRecall: { flag: 1, nudge: 1, leave: 1, declare_done: 0 } },
+	};
+	const original = { ...base, ops: { exactMatch: base.ops.exactMatch, perOpRecall: { leave: 1, nudge: 1, declare_done: 0, flag: 1 } } };
+	assert.deepEqual(Object.keys(compare(original, reordered)), [], "same numbers, different insertion order, no divergence");
 });

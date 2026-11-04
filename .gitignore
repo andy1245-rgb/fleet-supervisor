@@ -18,9 +18,14 @@ bench/results/*.tmp
 .cache/
 finetune/checkpoints/
 
-# Generated fine-tune artifacts (`make data/train/build`); bench/results and
-# bench/tasks are NOT ignored — those are the empirical history.
+# Generated fine-tune artifacts (`make data/train/build`).
 finetune/out/
+
+# The mined corpus and the bench task set are private research data: they carry
+# session text, addresses and terminal output from real work. The harness, the
+# schema and the records ship — the rows they were measured on do not. A record
+# cites its task-set sha and is re-scorable against a copy supplied out of band.
+bench/tasks/*.jsonl
 
 # Trainer scratch dirs created by ad-hoc probes
 checkpoints/

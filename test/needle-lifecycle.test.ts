@@ -244,7 +244,7 @@ test("a timed-out request kills the wedged child and the next decision respawns"
 	try {
 		const timedOut = await model.decide(INPUT);
 		assert.equal(timedOut.refused, true, "a timeout is a refusal, never an op");
-		assert.equal(timedOut.argument, "model returned no JSON object");
+		assert.equal(timedOut.argument, "sidecar error: needle timeout after 200ms");
 		const dead = latestPid(trace);
 		assert.equal(await waitForDeath(dead), true, "the wedged child must be killed, not reused");
 
