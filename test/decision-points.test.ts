@@ -72,7 +72,7 @@ test("message length is not a label", () => {
 });
 
 test("a correction of the agent's course is a redirect", () => {
-	assert.equal(labelOf("i meant /home/andrew/swarmHarness oops"), "redirect");
+	assert.equal(labelOf("i meant /home/operator/swarmHarness oops"), "redirect");
 	assert.equal(labelOf("two reviewres actually"), "redirect");
 	assert.equal(labelOf("nope images for the website are js placeholders"), "redirect");
 	assert.equal(reasonOf("i meant my cmdc go accounts").includes('"i meant"'), true);

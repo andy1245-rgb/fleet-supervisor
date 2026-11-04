@@ -83,7 +83,7 @@ test("a tail over the budget is still clipped to it", () => {
 });
 
 test("a brief gets its own section and is not clipped by the tail budget", () => {
-	const brief = `trigger: churn in agentFleet\n\n--- pane p1 (named by the trigger) ---\ntail:\n${"x".repeat(5000)}`;
+	const brief = `trigger: churn in fleet-supervisor\n\n--- pane p1 (named by the trigger) ---\ntail:\n${"x".repeat(5000)}`;
 	const out = renderInput({ ...BASE, acceptance: undefined, tail: "", brief });
 
 	assert.ok(brief.length > MAX_TAIL_CHARS * 5, "the brief really is far past the tail budget");
@@ -96,7 +96,7 @@ test("a brief gets its own section and is not clipped by the tail budget", () =>
 });
 
 test("a brief plus a printed tail keeps only the brief", () => {
-	const brief = "trigger: collision in agentFleet\n\n--- pane p1 ---\ntail:\nshared file";
+	const brief = "trigger: collision in fleet-supervisor\n\n--- pane p1 ---\ntail:\nshared file";
 	const out = renderInput({ ...BASE, tail: "z".repeat(2000), brief });
 
 	assert.equal(out.endsWith(brief), true);

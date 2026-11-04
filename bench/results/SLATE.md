@@ -44,11 +44,11 @@ Task set `b9765d1a55e18b4e`, 40 rows, identical for every variant.
 
 ## What is on disk
 
-- `/home/andrew/agentFleet/finetune/out/d4/d4.cact` — **absent**: not trained: `make slate` never reached this variant
-- `/home/andrew/agentFleet/finetune/out/d8/d8.cact` — **absent**: not trained: `make slate` never reached this variant
-- `/home/andrew/agentFleet/finetune/out/d20/d20.cact` — **absent**: not trained: `make slate` never reached this variant
-- `/home/andrew/agentFleet/finetune/out/triage/triage.cact` — **absent**: not trained: `make slate` never reached this variant
-- `/home/andrew/agentFleet/finetune/out/control-d8/control-d8.cact` — 27411604 bytes, 8 layers, benchmarked
+- `/home/operator/work/fleet-supervisor/finetune/out/d4/d4.cact` — **absent**: not trained: `make slate` never reached this variant
+- `/home/operator/work/fleet-supervisor/finetune/out/d8/d8.cact` — **absent**: not trained: `make slate` never reached this variant
+- `/home/operator/work/fleet-supervisor/finetune/out/d20/d20.cact` — **absent**: not trained: `make slate` never reached this variant
+- `/home/operator/work/fleet-supervisor/finetune/out/triage/triage.cact` — **absent**: not trained: `make slate` never reached this variant
+- `/home/operator/work/fleet-supervisor/finetune/out/control-d8/control-d8.cact` — 27411604 bytes, 8 layers, benchmarked
 
 ## Cloud row
 
@@ -68,7 +68,7 @@ The 262.4s/step baseline above was measured on the loaded laptop (i5-1235U, 12 t
 
 ### Remote environment
 
-`python -m venv .venv` at `C:/Users/andre/agentFleet-train/.venv`, then `.venv\Scripts\python.exe -m pip install "cactus-needle[train]"`. Resolved, from `importlib.metadata`:
+`python -m venv .venv` at `C:/Users/andre/fleet-supervisor-train/.venv`, then `.venv\Scripts\python.exe -m pip install "cactus-needle[train]"`. Resolved, from `importlib.metadata`:
 
 | package | dell321 | this laptop |
 |---|---|---|
@@ -90,7 +90,7 @@ Same corpus, same flags, same file: a 48-row slice of `out/slate/d4/train.jsonl`
 ```
 .venv\Scripts\python.exe measure.py --label d321-<len> --jsonl <that slice> \
     --max-len <len> --epochs 1 --deadline <n> \
-    --out C:\Users\andre\agentFleet-train\logs\d321-<len>.json
+    --out C:\Users\andre\fleet-supervisor-train\logs\d321-<len>.json
 ```
 
 which invokes the baseline flags verbatim from `finetune/out/slate/_probe/d4/probe.log`:
@@ -134,9 +134,9 @@ The stated gate was "if dell321@512 projects to under ~45 min/epoch, run one ful
 Two further reasons the projections above are floors rather than estimates:
 
 - **Only 2 timed steps per configuration**, which is the minimum this measurement is allowed to rest on, and each pair drifts upward as the part heats: 235.7 -> 280.7 at 1024, 130.6 -> 137.6 at 768, 105.2 -> 112.5 at 512. The 258V is a 17-30W part, so a sustained 29-step epoch will sit below the burst rate these numbers come from. Treat every min/epoch in the table as optimistic.
-- **Nothing was exported**, so there is no `.cact` from this work on either machine: `C:/Users/andre/agentFleet-train/out/` is empty, `finetune/out/slate/d4/` still holds only `data.json`, `train.jsonl` and `val.jsonl`, and `finetune/out/control-d8/control-d8.cact` remains the only archive in `finetune/out/`. The slate is still 0 of 4 fine-tuned variants, unchanged from the status above.
+- **Nothing was exported**, so there is no `.cact` from this work on either machine: `C:/Users/andre/fleet-supervisor-train/out/` is empty, `finetune/out/slate/d4/` still holds only `data.json`, `train.jsonl` and `val.jsonl`, and `finetune/out/control-d8/control-d8.cact` remains the only archive in `finetune/out/`. The slate is still 0 of 4 fine-tuned variants, unchanged from the status above.
 
-The remote workspace is left in place at `C:/Users/andre/agentFleet-train/` (venv, `data/` with the two splits, `tools.py`, the base checkpoint, `measure.py`, and `logs/d321-{1024,768,512,256}.json` with the raw trainer logs beside them). No process was left running; `Get-Process python` is empty and the box sits at 3-9% CPU.
+The remote workspace is left in place at `C:/Users/andre/fleet-supervisor-train/` (venv, `data/` with the two splits, `tools.py`, the base checkpoint, `measure.py`, and `logs/d321-{1024,768,512,256}.json` with the raw trainer logs beside them). No process was left running; `Get-Process python` is empty and the box sits at 3-9% CPU.
 
 ---
 

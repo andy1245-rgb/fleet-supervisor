@@ -21,7 +21,7 @@ import { agent } from "./fixtures.ts";
 // --------------------------------------------------------------- fixtures
 
 function pending(overrides: Partial<PendingDecision> = {}): PendingDecision {
-	return { paneId: "p1", group: "agentFleet", op: "leave", argument: "still on the current step", decidedAtSeq: 5, ticksObserved: 0, ...overrides };
+	return { paneId: "p1", group: "fleet-supervisor", op: "leave", argument: "still on the current step", decidedAtSeq: 5, ticksObserved: 0, ...overrides };
 }
 
 /** A resting pane whose counter has not moved since the decision at sequence 5. */
@@ -34,7 +34,7 @@ function outcome(op: Op, outcomeKind: OutcomeKind): OutcomeEvent {
 	fixtureTs += 60_000;
 	return makeOutcome({
 		paneId: "p1",
-		group: "agentFleet",
+		group: "fleet-supervisor",
 		op,
 		outcomeKind,
 		ticksObserved: DEFAULT_WINDOW_TICKS,
@@ -42,7 +42,7 @@ function outcome(op: Op, outcomeKind: OutcomeKind): OutcomeEvent {
 		argument: `${op} on a pane that then ${outcomeKind}`,
 		status: outcomeKind === "unobserved" ? "unknown" : "idle",
 		idleTicks: outcomeKind === "unobserved" ? 0 : DEFAULT_WINDOW_TICKS,
-		cwd: "/home/andrew/agentFleet",
+		cwd: "/home/operator/work/fleet-supervisor",
 		title: "pi",
 		ts: new Date(fixtureTs).toISOString(),
 	});
@@ -114,8 +114,8 @@ test("pending.json round-trips, and a restarted tick keeps the ticks already spe
 	assert.equal(path, "/state/pending.json", "the state file sits beside the log it explains");
 
 	let open: Map<string, PendingDecision> = new Map();
-	open = recordPending(open, decidedAt({ paneId: "p1", group: "agentFleet", op: "leave", argument: "stay out of it" }, 7));
-	open = recordPending(open, decidedAt({ paneId: "p2", group: "agentFleet", op: "declare_done", argument: "finished" }, 11));
+	open = recordPending(open, decidedAt({ paneId: "p1", group: "fleet-supervisor", op: "leave", argument: "stay out of it" }, 7));
+	open = recordPending(open, decidedAt({ paneId: "p2", group: "fleet-supervisor", op: "declare_done", argument: "finished" }, 11));
 
 	const restored = parsePending(JSON.stringify(pendingJson(open), null, "\t"));
 	assert.deepEqual([...restored.keys()], ["p1", "p2"], "sorted by pane id, so an unchanged rewrite produces the same bytes");
@@ -125,7 +125,7 @@ test("pending.json round-trips, and a restarted tick keeps the ticks already spe
 	// Two ticks into a three-tick window, a restart is two ticks in: the counter
 	// lives in the file, and a reader that started it at zero would judge a pane
 	// that has not had its window yet.
-	const spent = recordPending(new Map(), { ...decidedAt({ paneId: "p1", group: "agentFleet", op: "leave", argument: "stay out of it" }, 5), ticksObserved: DEFAULT_WINDOW_TICKS - 1 });
+	const spent = recordPending(new Map(), { ...decidedAt({ paneId: "p1", group: "fleet-supervisor", op: "leave", argument: "stay out of it" }, 5), ticksObserved: DEFAULT_WINDOW_TICKS - 1 });
 	const reloaded = parsePending(JSON.stringify(pendingJson(spent))).get("p1");
 	assert.ok(reloaded !== undefined);
 	assert.equal(reloaded.ticksObserved, DEFAULT_WINDOW_TICKS - 1);
@@ -134,7 +134,7 @@ test("pending.json round-trips, and a restarted tick keeps the ticks already spe
 
 	// A newer decision for the same pane supersedes the open one: judging both
 	// would attribute one stretch of stillness to two different ops.
-	const superseded = recordPending(open, decidedAt({ paneId: "p1", group: "agentFleet", op: "nudge", argument: "try the next test" }, 9));
+	const superseded = recordPending(open, decidedAt({ paneId: "p1", group: "fleet-supervisor", op: "nudge", argument: "try the next test" }, 9));
 	assert.equal(superseded.size, 2);
 	assert.equal(superseded.get("p1")?.op, "nudge");
 });
@@ -144,7 +144,7 @@ test("a malformed pending.json is bookkeeping lost, not a tick stopped", () => {
 	assert.deepEqual([...parsePending("not json at all").keys()], []);
 	assert.deepEqual([...parsePending("[1, 2, 3]").keys()], []);
 
-	const good = decidedAt({ paneId: "p1", group: "agentFleet", op: "leave", argument: "a" }, 3);
+	const good = decidedAt({ paneId: "p1", group: "fleet-supervisor", op: "leave", argument: "a" }, 3);
 	const mixed = parsePending(JSON.stringify({ p1: good, p2: { op: "nonsense", group: "g" }, p3: { ...good, ticksObserved: -1 } }));
 	assert.deepEqual([...mixed.keys()], ["p1"], "an unparseable entry is dropped and the rest of the file still loads");
 });

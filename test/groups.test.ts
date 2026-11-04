@@ -22,7 +22,7 @@ test("a declared label wins over the cwd-derived bucket", () => {
 });
 
 test("an empty declared label does not win", () => {
-	assert.equal(groupOf(agent("w2C:p1"), claim("w2C:p1", { group: "" }), HOME), "agentFleet");
+	assert.equal(groupOf(agent("w2C:p1"), claim("w2C:p1", { group: "" }), HOME), "fleet-supervisor");
 });
 
 test("a path equal to the home dir buckets to home", () => {
@@ -32,13 +32,13 @@ test("a path equal to the home dir buckets to home", () => {
 });
 
 test("a nested repo path buckets to its basename", () => {
-	assert.equal(groupOf(agent("w2C:p1", { cwd: REPO, foregroundCwd: REPO }), undefined, HOME), "agentFleet");
+	assert.equal(groupOf(agent("w2C:p1", { cwd: REPO, foregroundCwd: REPO }), undefined, HOME), "fleet-supervisor");
 	assert.equal(groupOf(agent("w2C:p2", { cwd: NESTED, foregroundCwd: NESTED }), undefined, HOME), "fleet");
 });
 
 test("foregroundCwd is preferred over cwd", () => {
 	const split = agent("w2C:p1", { cwd: HOME, foregroundCwd: REPO });
-	assert.equal(groupOf(split, undefined, HOME), "agentFleet");
+	assert.equal(groupOf(split, undefined, HOME), "fleet-supervisor");
 
 	const fallback = agent("w2C:p2", { cwd: NESTED, foregroundCwd: "" });
 	assert.equal(groupOf(fallback, undefined, HOME), "fleet");
@@ -271,10 +271,10 @@ test("a home-heavy fleet collides only where two agents share a repo", () => {
 
 	const found = collisions(agents, none(), HOME);
 
-	assert.deepEqual([...found.keys()], ["agentFleet"]);
+	assert.deepEqual([...found.keys()], ["fleet-supervisor"]);
 	assert.equal(found.size, 1, "five agents in $HOME must not manufacture a trigger");
 	assert.deepEqual(
-		found.get("agentFleet")?.map((m) => m.paneId),
+		found.get("fleet-supervisor")?.map((m) => m.paneId),
 		["r1", "r2"],
 	);
 });

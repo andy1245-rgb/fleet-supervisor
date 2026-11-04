@@ -1,4 +1,4 @@
-# agentFleet
+# fleet-supervisor
 
 A supervisor for a fleet of live agent panes. It observes them through `herdr`, detects which ones actually moved since the last tick, decides one action per moved agent with a cheap decision model that escalates once to a stronger one, holds that action when it is contested, investigates cross-agent trouble with an inspector that only ever reports, acts only through `herdr`, and notifies a phone. It is not a new agent loop and it does not re-implement one: the agents already exist and already run; this decides what, if anything, to say to them next. The whole economics of the thing rest on not looking at an agent that did not move.
 
@@ -88,7 +88,7 @@ The measured per-decision cost is **$0.000227** (`costUsd.total` 0.009095 over `
 Everything here was executed in this repository; the outputs are in the findings section.
 
 ```sh
-cd /home/andrew/agentFleet
+cd /home/operator/work/fleet-supervisor
 
 npm test                 # 187 tests, node --test
 npx tsc --noEmit         # exit 0
@@ -123,10 +123,10 @@ Two knobs decide how much the supervisor asks a human instead of acting:
 Per-group overrides live in `<state>/policy.json` and are read every tick, so changing one needs no restart and no code change:
 
 ```json
-{ "askByGroup": { "agentFleet": "always", "home": "often" } }
+{ "askByGroup": { "fleet-supervisor": "always", "home": "often" } }
 ```
 
-A bare map — `{ "agentFleet": "always" }` — is accepted too; entries whose value is not a policy are ignored rather than trusted.
+A bare map — `{ "fleet-supervisor": "always" }` — is accepted too; entries whose value is not a policy are ignored rather than trusted.
 
 A held action is one line in `<state>/asks.jsonl`, and the last line for an id is that id's state, so a pending action survives the supervisor restarting and cannot be applied twice:
 
@@ -149,7 +149,7 @@ node ext/pi-fleet/selfcheck.ts         # drives the extension's real handlers, ~
 
 `npm run bench`, `npm run mine`, `npm run tick` and `npm run watchdog` are thin aliases for the same four scripts. `bench/runners/run.ts` takes a `--limit=N` that **stratifies by expected op** rather than striding or slicing the file. The contract: every op in the corpus gets at least one seat; an op with fewer rows than an even split (that is `leave`, 7 of 502) contributes all of its rows as soon as the limit can hold them; the subset is exactly `N` rows unless the arithmetic cannot be, and then the record says so. Sampling is deterministic from a seed and the row id, so two records against one `taskSetSha` select the same rows, and every record carries `sampledPerOp` / `corpusPerOp` so the subset's composition is part of the measurement rather than an assumption about it.
 
-Loading `ext/pi-fleet` (full detail in `ext/pi-fleet/README.md`): symlink it into `~/.pi/agent/extensions/pi-fleet`, or pass `pi -e /home/andrew/agentFleet/ext/pi-fleet` for one session, or list the absolute path in the `extensions` array of `~/.pi/agent/settings.json`. It must stay inside this repository — it imports `src/fleet/registry.ts` for the `Claim` shape and the atomic write.
+Loading `ext/pi-fleet` (full detail in `ext/pi-fleet/README.md`): symlink it into `~/.pi/agent/extensions/pi-fleet`, or pass `pi -e /home/operator/work/fleet-supervisor/ext/pi-fleet` for one session, or list the absolute path in the `extensions` array of `~/.pi/agent/settings.json`. It must stay inside this repository — it imports `src/fleet/registry.ts` for the `Claim` shape and the atomic write.
 
 ## Measured findings
 

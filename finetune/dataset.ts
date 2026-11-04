@@ -4,6 +4,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SYSTEM, renderInput } from "../src/decision/prompt.ts";
 import { OPS, type DecisionInput, type Op } from "../src/decision/types.ts";
 import { LABEL_TO_OP, isLabel, type Label } from "../src/labeling/label-to-op.ts";
@@ -57,10 +58,15 @@ interface Point {
 	toolCalls: string;
 }
 
+/** This file lives at <root>/finetune/dataset.ts, so the repo root is two levels up.
+ *  Derived rather than hardcoded: an absolute default made the converter unusable
+ *  from any other checkout. */
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
 const DEFAULTS: Args = {
-	input: "/home/andrew/agentFleet/mine/out/decision-points.jsonl",
-	outDir: "/home/andrew/agentFleet/finetune/out",
-	tools: "/home/andrew/agentFleet/finetune/out/tools.json",
+	input: join(ROOT, "mine/out/decision-points.jsonl"),
+	outDir: join(ROOT, "finetune/out"),
+	tools: join(ROOT, "finetune/out/tools.json"),
 	valFraction: 0.1,
 	maxExampleChars: 1850,
 	maxTailChars: 900,

@@ -2,7 +2,10 @@
 # Every command here is one the installed package actually accepts; the
 # verification for each is pasted in README.md.
 
-ROOT     := /home/andrew/agentFleet
+# Derived from this file's own location, so a clone runs anywhere: the repo root is
+# the parent of finetune/. A hardcoded absolute path made every target fail outside
+# the one machine it was written on, and put a username in a public repository.
+ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 VENV     := $(ROOT)/.venv
 PY       := $(VENV)/bin/python
 NEEDLE   := $(VENV)/bin/needle

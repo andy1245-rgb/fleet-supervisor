@@ -1,4 +1,4 @@
-# Sceptical review of the agentFleet plan
+# Sceptical review of the fleet-supervisor plan
 
 2026-10-26. Read-only review. Nothing outside `docs/reviews/` was modified; no training
 process was touched. Every number here comes from `bench/results/`, from a read-only command
@@ -243,7 +243,7 @@ the inverse of the deployment's.**
 | `idleTicks` | 1 | `0` |
 | `acceptance` | 1 | absent |
 | `phase` | 4 | `unknown` 316, `implement` 70, `verify` 68, `research` 48 |
-| `cwd` | 15 | `/home/andrew` 282 (56%), `/home` 80, `toolInterfacer` 45 |
+| `cwd` | 15 | `/home/operator` 282 (56%), `/home` 80, `toolInterfacer` 45 |
 | `title`, `last`, `tail` | ~unique | the only varying evidence |
 
 Four of twelve fields are constants, and `phase` is itself derived from the same tail
@@ -453,7 +453,7 @@ proposal is re-gated.
    $0.0002274/decision**.
 5. **Its most common trigger is not an anomaly — it is the steady state.** `collisions()`
    (`src/fleet/groups.ts:44-56`) buckets by exact resolved cwd among panes with
-   `status === "working"`, requiring ≥2. Live sample: **15 of 21 panes share `/home/andrew`**
+   `status === "working"`, requiring ≥2. Live sample: **15 of 21 panes share `/home/operator`**
    exactly. So the collision predicate is "two agents in the home directory are working at the
    same instant", and its frequency is:
 
@@ -541,7 +541,7 @@ predicate at all.
 1. **A channel that works** (§b) — without it there is nothing to tune.
 2. **An action budget** — `maxPromptsPerTick: 3` is a per-tick cap; there is no per-day cap on
    prompts, dollars, or notifications. A churning fleet can prompt 3/tick = 4,320/day.
-3. Per-group autonomy already exists: `askByGroup {agentFleet: "never", home: "always"}` gives
+3. Per-group autonomy already exists: `askByGroup {"fleet-supervisor": "never", home: "always"}` gives
    exactly "these groups may be acted on, those need approval". That axis is adequate and should
    be kept as-is.
 4. Time windows — no measurement supports them, and there is no evidence the operator wants a
@@ -766,7 +766,7 @@ human-message length p10/p50/p90/p99/max = 8 / 67 / 326 / 1576 / 2000
   >200 chars: 89   80-200: 143   <80: 270
 field cardinality over 502 task inputs:
   status 1 (idle)   claimState 1 (working)   idleTicks 1 (0)   acceptance 1 (absent)
-  phase 4 (unknown 316, implement 70, verify 68, research 48)   cwd 15 (/home/andrew 282)
+  phase 4 (unknown 316, implement 70, verify 68, research 48)   cwd 15 (/home/operator 282)
 tail chars p10/p50/p90/max = 773 / 1607 / 2320 / 2491 ; 417 tails contain a tool-call line
 phase→expectedOp: unknown→nudge 261, verify→nudge 53, implement→nudge 52, research→nudge 40,
                   implement→flag 18, unknown→flag 51, verify→flag 12, research→flag 8,
@@ -822,7 +822,7 @@ mean 16.46 min ; gaps ≤1 min: 74 ; ≤5 min: 221 ; ≤10 min: 282
 ```
 panes 21   statuses {idle 17, done 4, working 0}
 completion_seq === state_change_seq: 21/21
-distinct foreground_cwd: 7 ; /home/andrew 15 (71%), then 1 each
+distinct foreground_cwd: 7 ; /home/operator 15 (71%), then 1 each
 response size 7820 bytes, one call
 ```
 

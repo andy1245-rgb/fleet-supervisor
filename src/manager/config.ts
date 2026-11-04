@@ -7,9 +7,9 @@
 // `<state>/policy.json`, so changing them never needs a restart of the loop and
 // never needs a code change:
 //
-//   { "askByGroup": { "agentFleet": "always", "home": "often" } }
+//   { "askByGroup": { "fleet-supervisor": "always", "home": "often" } }
 //
-// A bare map — `{ "agentFleet": "always" }` — is accepted as well, and entries
+// A bare map — `{ "fleet-supervisor": "always" }` — is accepted as well, and entries
 // whose value is not a policy are ignored rather than trusted.
 //
 // Policies (`AskPolicy` in ./ask.ts):

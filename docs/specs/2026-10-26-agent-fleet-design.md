@@ -1,4 +1,4 @@
-# agentFleet — design record
+# fleet-supervisor — design record
 
 2026-10-26. What the supervisor is for, the four decisions it is built on, what was rejected, and how any of it is supposed to be believed.
 

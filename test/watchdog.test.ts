@@ -25,7 +25,7 @@ function build(elapsedMs: number): CommandSample {
 
 test("an inference server is never flagged however old", () => {
 	for (const command of [
-		"/home/andrew/llama.cpp/build/bin/llama-server -m model.gguf",
+		"/home/operator/llama.cpp/build/bin/llama-server -m model.gguf",
 		"llama-server --port 8080",
 		"/usr/local/bin/vllm serve /models/thing",
 	]) {
@@ -101,7 +101,7 @@ test("classify is first-match: a llama path wins over the build rule", () => {
 });
 
 test("classify is first-match: an infrastructure process is not judged as a command", () => {
-	const verdict = classify(sample({ command: "sshd: andrew@pts/3", ancestors: ["sshd"], foreground: true, elapsedMs: 12 * HOUR }));
+	const verdict = classify(sample({ command: "sshd: user@pts/3", ancestors: ["sshd"], foreground: true, elapsedMs: 12 * HOUR }));
 
 	assert.equal(verdict.rule, "infrastructure");
 	assert.equal(verdict.flagged, false);

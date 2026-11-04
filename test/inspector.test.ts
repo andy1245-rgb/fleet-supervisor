@@ -8,9 +8,9 @@ import { BRIEF_BUDGET, buildBrief, inspect, DEEP_TIMEOUT_MS, type InspectContext
 import type { Decision, DecisionInput, DecisionModel } from "../src/decision/types.ts";
 import type { Claim } from "../src/fleet/registry.ts";
 import type { Trigger } from "../src/manager/triggers.ts";
-import { agent, claim } from "./fixtures.ts";
+import { agent, claim, REPO } from "./fixtures.ts";
 
-const GROUP = "agentFleet";
+const GROUP = "fleet-supervisor";
 
 const CHURN: Trigger = {
 	kind: "churn",
@@ -23,7 +23,7 @@ const COLLISION: Trigger = {
 	kind: "collision",
 	group: GROUP,
 	paneIds: ["p1", "p2"],
-	detail: `2 agents working in ${"/home/andrew/work/agentFleet"}`,
+	detail: `2 agents working in ${REPO}`,
 };
 
 const AGENTS = [agent("p1", { status: "working" }), agent("p2", { status: "working" })];
@@ -113,16 +113,16 @@ test("the brief names every pane in the trigger and its group, and nobody else",
 	]);
 
 	const brief = buildBrief(COLLISION, agents, claims, tails);
-	assert.match(brief, /^trigger: collision in agentFleet/);
-	assert.match(brief, /detail: 2 agents working in \/home\/andrew\/work\/agentFleet/);
+	assert.match(brief, /^trigger: collision in fleet-supervisor/);
+	assert.match(brief, new RegExp(`detail: 2 agents working in ${REPO}`));
 	assert.match(brief, /panes: 3 \(2 named by the trigger, 1 in the same group\)/);
 
 	assert.match(brief, /--- pane p1 \(named by the trigger\) ---/);
 	assert.match(brief, /--- pane p2 \(named by the trigger\) ---/);
-	assert.match(brief, /--- pane p3 \(same group as agentFleet\) ---/);
+	assert.match(brief, /--- pane p3 \(same group as fleet-supervisor\) ---/);
 	assert.doesNotMatch(brief, /p9/, "another group's pane is not this trigger's business");
 
-	assert.match(brief, /cwd: \/home\/andrew\/work\/agentFleet/);
+	assert.match(brief, new RegExp(`cwd: ${REPO}`));
 	assert.match(brief, /herdr: working/);
 	assert.match(brief, /claim: phase implement, state working, last "wrote test\/detect\.test\.ts"/);
 	assert.match(brief, /claim: phase verify, state waiting, last "check the ladder"/);
@@ -338,7 +338,7 @@ test("deep mode is one bounded pi child that is told what it may read", async ()
 	assert.ok(call !== undefined, "the child was spawned once");
 	assert.equal(calls.length, 1);
 	assert.deepEqual(call.args.slice(0, 4), ["-p", "--no-session", "--tools", "bash"]);
-	assert.match(call.args[4] ?? "", /trigger: collision in agentFleet/);
+	assert.match(call.args[4] ?? "", /trigger: collision in fleet-supervisor/);
 	assert.match(call.args[4] ?? "", /herdr agent read <paneId>/);
 	assert.match(call.args[4] ?? "", /Never prompt, focus, close/);
 	assert.equal(call.timeoutMs, DEEP_TIMEOUT_MS);

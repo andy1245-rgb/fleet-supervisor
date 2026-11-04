@@ -34,14 +34,14 @@ Recorded because everything below is version-specific.
 
 | | |
 |---|---|
-| Package | `cactus-needle` **3.2.8** (`/home/andrew/agentFleet/.venv`) |
-| Interpreter | CPython **3.14.7**, uv venv at `/home/andrew/agentFleet/.venv` |
+| Package | `cactus-needle` **3.2.8** (`/home/operator/work/fleet-supervisor/.venv`) |
+| Interpreter | CPython **3.14.7**, uv venv at `/home/operator/work/fleet-supervisor/.venv` |
 | Engine library | `libneedle.so` **3.3.3**, cached at `~/.cache/cactus-needle/v3/3.3.3/` |
 | Base weights | `needle3.cact` 35.3 MB, cached beside it |
 | Installed | `huggingface_hub 2.3.0`, `tqdm`, `click`, `PyYAML` — **no pip in the venv** |
 | **Not** installed | `jax`, `jaxlib`, `flax`, `optax`, `numpy`, `safetensors`, `sentencepiece` |
 | Node | v24.21.0 (runs `.ts` directly by type stripping) |
-| tsc | 5.9.3 at `agentFleet/node_modules/.bin/tsc` |
+| tsc | 5.9.3 at `fleet-supervisor/node_modules/.bin/tsc` |
 | Model config | vocab 8192, 20 layers, 121M params, sliding window 1024, `max_position_embeddings` 8192 |
 
 **The training stack is missing.** `needle finetune` and `needle build --lora`
@@ -70,7 +70,7 @@ Requires-Dist: sentencepiece; extra == "train"
 so `make deps` runs
 
 ```sh
-uv pip install --python /home/andrew/agentFleet/.venv/bin/python "cactus-needle[train]"
+uv pip install --python /home/operator/work/fleet-supervisor/.venv/bin/python "cactus-needle[train]"
 ```
 
 `uv` because the venv has no `pip` (`python -m pip` → `No module named pip`).
@@ -234,7 +234,7 @@ tail is worth more than a shorter one.
 ## 4. The pipeline
 
 ```sh
-cd /home/andrew/agentFleet/finetune
+cd /home/operator/work/fleet-supervisor/finetune
 
 make deps      # uv pip install "cactus-needle[train]"   (once; network)
 make data      # mine/out/decision-points.jsonl -> out/train.jsonl + out/val.jsonl
@@ -427,13 +427,13 @@ ModuleNotFoundError: No module named 'numpy'
 
 ```
 $ node dataset.ts                      # over the real mine/out/decision-points.jsonl
-  input     /home/andrew/agentFleet/mine/out/decision-points.jsonl
+  input     /home/operator/work/fleet-supervisor/mine/out/decision-points.jsonl
   read      502 lines -> 502 examples  (train 452 / val 50)
   classes   leave 7  nudge 406  declare_done 0  flag 89
   labels    continue:nudge 71  nudge:nudge 323  redirect:nudge 12  stop:leave 7  new_task:flag 89
   size      longest example 2355 chars, cap 2400  (~785 tokens at 3 chars/token)
   skipped   trimmed 462
-  wrote     /home/andrew/agentFleet/finetune/out/train.jsonl  /home/andrew/agentFleet/finetune/out/val.jsonl
+  wrote     /home/operator/work/fleet-supervisor/finetune/out/train.jsonl  /home/operator/work/fleet-supervisor/finetune/out/val.jsonl
 
 $ make dry                             # the same converter over the fixture
   read      12 lines -> 10 examples  (train 9 / val 1)
@@ -459,7 +459,7 @@ examples; the check above is what caught it.
 ```
 $ make smoke LIMIT=1     # real engine, real archive
 needle decision eval
-  weights     /home/andrew/.cache/cactus-needle/v3/3.3.3/needle3.cact
+  weights     /home/operator/.cache/cactus-needle/v3/3.3.3/needle3.cact
   val         out/dry/val.jsonl  1 examples, 1 scored
   tools       train-exact JSON, 779 chars
               generation: 3
@@ -532,7 +532,7 @@ observed. Nothing else in this scaffold is inferred.
    head), or have the sidecar map `None` to a constant when it loads tuned
    weights. Both are outside `finetune/`.
 8. **`docs/` is absent.** The brief said metric definitions live in
-   `/home/andrew/agentFleet/docs/`; there is no such directory in this workspace,
+   `/home/operator/work/fleet-supervisor/docs/`; there is no such directory in this workspace,
    so the metrics here are the ones the eval needs: per-class accuracy, decile
    calibration, refusal count.
 9. **`UNVERIFIED` — that this label mapping is the one the ladder wants.** The

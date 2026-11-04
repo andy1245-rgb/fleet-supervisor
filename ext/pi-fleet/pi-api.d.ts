@@ -1,5 +1,5 @@
 // The slice of pi's extension API this plugin touches, declared locally so this
-// repository typechecks without installing pi as a dependency (agentFleet has
+// repository typechecks without installing pi as a dependency (fleet-supervisor has
 // none, and a copy of the host's types would be a second source of truth).
 //
 // Copied from the installed host declarations, which remain authoritative:

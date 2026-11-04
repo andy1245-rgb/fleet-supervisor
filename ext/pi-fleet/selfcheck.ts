@@ -36,7 +36,7 @@ function check(name: string, ok: boolean, detail = ""): void {
 }
 
 function makeCtx(mode: ExtensionMode): ExtensionContext {
-	return { mode, cwd: "/home/andrew/agentFleet", hasUI: false } as unknown as ExtensionContext;
+	return { mode, cwd: process.cwd(), hasUI: false } as unknown as ExtensionContext;
 }
 
 /** A stand-in for pi's ExtensionAPI: records handlers so the check can dispatch. */

@@ -1,7 +1,7 @@
 # pi-fleet
 
-Every live pi session writes its own claim file. The agentFleet supervisor
-(`~/agentFleet/src/manager/tick.ts`) reads one JSON claim per live pane from
+Every live pi session writes its own claim file. The fleet-supervisor supervisor
+(`~/fleet-supervisor/src/manager/tick.ts`) reads one JSON claim per live pane from
 `~/.pi/agent/fleet/<pane>.json` and decides from it what to say to that agent —
 but it only ever sees a terminal, so it cannot know what a session was asked to
 do or what phase it thinks it is in. The session knows, so the session writes it.
@@ -17,7 +17,7 @@ the file is the session's own report.
 ```json
 {
 	"paneId": "w2C:p1",
-	"cwd": "/home/andrew/agentFleet",
+	"cwd": "/home/operator/work/fleet-supervisor",
 	"intent": "Make every live agent session report its own state as a claim file.",
 	"phase": "verify",
 	"state": "done",
@@ -45,21 +45,21 @@ Three ways to load it, all verified against the installed pi 1.2.0:
    directory in and it loads in every session:
 
    ```sh
-   ln -s /home/andrew/agentFleet/ext/pi-fleet ~/.pi/agent/extensions/pi-fleet
+   ln -s /home/operator/work/fleet-supervisor/ext/pi-fleet ~/.pi/agent/extensions/pi-fleet
    ```
 
 2. **This session only**, on the command line (`-e` / `--extension`, repeatable):
 
    ```sh
-   pi -e /home/andrew/agentFleet/ext/pi-fleet
-   pi -e /home/andrew/agentFleet/ext/pi-fleet/index.ts    # same thing
+   pi -e /home/operator/work/fleet-supervisor/ext/pi-fleet
+   pi -e /home/operator/work/fleet-supervisor/ext/pi-fleet/index.ts    # same thing
    ```
 
 3. **Persistently in settings**, absolute path in the `extensions` array of
    `~/.pi/agent/settings.json` (`~` and absolute paths both resolve):
 
    ```json
-   { "extensions": ["/home/andrew/agentFleet/ext/pi-fleet"] }
+   { "extensions": ["/home/operator/work/fleet-supervisor/ext/pi-fleet"] }
    ```
 
 No runtime dependencies: `package.json` is private, `"type": "module"`, and its
@@ -150,7 +150,7 @@ own `readClaim` parses the result back unchanged, both no-op guards, and the
 resume-vs-fresh-start rule. Exits non-zero on any failure.
 
 ```sh
-npx tsc --noEmit      # from /home/andrew/agentFleet; ext/ is in tsconfig include
+npx tsc --noEmit      # from /home/operator/work/fleet-supervisor; ext/ is in tsconfig include
 ```
 
 The repository has no pi dependency, so `pi-api.d.ts` declares the slice of the

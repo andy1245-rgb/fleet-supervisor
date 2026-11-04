@@ -187,8 +187,8 @@ test("an optional field of the wrong type is still rejected, but an extra key is
 
 test("the fork kinds are read from the gate's own sentences", () => {
 	assert.equal(forkKindOf("declare_done stops a live agent and cannot be silently undone"), "irreversible");
-	assert.equal(forkKindOf("collision in agentFleet: 2 agents working in /repo"), "cross-agent");
-	assert.equal(forkKindOf("churn in agentFleet: 3 turns"), "cross-agent");
+	assert.equal(forkKindOf("collision in fleet-supervisor: 2 agents working in /repo"), "cross-agent");
+	assert.equal(forkKindOf("churn in fleet-supervisor: 3 turns"), "cross-agent");
 	assert.equal(forkKindOf("nudge is 340 chars (limit 300)"), "scope-change");
 	assert.equal(forkKindOf("nudge names /etc/passwd outside /repo"), "scope-change");
 	assert.equal(forkKindOf("3 prompts already sent this tick (cap 3)"), "at-cap");
@@ -682,7 +682,7 @@ test("the human report and the JSON are the same numbers", () => {
 
 // -------------------------------------------------- the stages write these rows
 
-const REPO = "/home/andrew/work/agentFleet";
+const REPO = "/home/operator/work/fleet-supervisor";
 
 function fakePort(agent: HerdrAgent, promptResult: PromptResult = { disposition: "accepted" }): HerdrPort {
 	return {
@@ -760,7 +760,7 @@ test("one tick writes rows the report can read, with the gate's verdict on the a
 			};
 			writeFileSync(
 				join(dir, "registry", "p1.json"),
-				JSON.stringify({ paneId: "p1", cwd: REPO, intent: "pin the pure modules", phase: "implement", state: "working", last: "wrote tests", updated: new Date(Date.now() - 120_000).toISOString(), group: "agentFleet" }),
+				JSON.stringify({ paneId: "p1", cwd: REPO, intent: "pin the pure modules", phase: "implement", state: "working", last: "wrote tests", updated: new Date(Date.now() - 120_000).toISOString(), group: "fleet-supervisor" }),
 			);
 
 			const config = tickConfig(dir);
@@ -788,7 +788,7 @@ test("one tick writes rows the report can read, with the gate's verdict on the a
 			assert.equal(decision.op, "declare_done");
 			assert.equal(decision.held, true);
 			assert.equal(decision.policy, "fork");
-			assert.equal(decision.group, "agentFleet");
+			assert.equal(decision.group, "fleet-supervisor");
 			assert.equal(decision.decision, "declare_done(the work is pinned) via primary conf 0.90", "the human-readable summary rides on the row");
 
 			assert.equal(action.disposition, "held");
@@ -863,7 +863,7 @@ test("a dry tick records the rehearsal as dry, and an inspector finding as an in
 			};
 			writeFileSync(
 				join(dir, "registry", "p1.json"),
-				JSON.stringify({ paneId: "p1", cwd: REPO, intent: "answer the prompt", phase: "verify", state: "working", last: "ran the suite", updated: new Date(Date.now() - 60_000).toISOString(), group: "agentFleet" }),
+				JSON.stringify({ paneId: "p1", cwd: REPO, intent: "answer the prompt", phase: "verify", state: "working", last: "ran the suite", updated: new Date(Date.now() - 60_000).toISOString(), group: "fleet-supervisor" }),
 			);
 
 			const finding = JSON.stringify({ diagnosis: "waiting on a yes", recommendation: "say yes", evidence: ["blocked"], confidence: 0.8, proposed: { paneId: "p1", op: "nudge", argument: "yes, continue" } });

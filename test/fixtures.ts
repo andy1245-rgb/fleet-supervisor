@@ -2,11 +2,13 @@
 // test/*.test.ts` never picks this file up; it is imported by the test files so
 // each one only states the fields its behaviour depends on.
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { HerdrAgent } from "../src/herdr/types.ts";
 import type { Claim } from "../src/fleet/registry.ts";
 
-export const HOME = "/home/andrew";
-export const REPO = "/home/andrew/work/agentFleet";
+export const HOME = homedir();
+export const REPO = join(HOME, "work", "fleet-supervisor");
 
 export function agent(paneId: string, overrides: Partial<Omit<HerdrAgent, "paneId">> = {}): HerdrAgent {
 	return {

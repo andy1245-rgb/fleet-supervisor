@@ -1,6 +1,6 @@
 // pi-fleet — every live agent session reports its own state as a claim file.
 //
-// The supervisor (~/agentFleet/src/manager/tick.ts) reads one JSON claim per
+// The supervisor (~/fleet-supervisor/src/manager/tick.ts) reads one JSON claim per
 // live pane from ~/.pi/agent/fleet/<pane>.json and decides what to say to that
 // agent from `phase`, `last` and `state`. Nothing else can know those: the
 // supervisor sees a terminal, not a session's intent. So each session writes

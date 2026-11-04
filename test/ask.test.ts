@@ -23,8 +23,8 @@ import type { HerdrAgent, HerdrPort, PromptResult } from "../src/herdr/types.ts"
 import type { Trigger, TriggerKind } from "../src/manager/triggers.ts";
 
 const CWD = "/w/repo";
-const HOME = "/home/andrew";
-const TREE = "/home/andrew/work/agentFleet";
+const HOME = "/home/operator";
+const TREE = "/home/operator/work/fleet-supervisor";
 
 const dirs: string[] = [];
 
@@ -233,7 +233,7 @@ test("a relative path is judged against the agent's own cwd", () => {
 });
 
 test("a homedir path is expanded before judging it", () => {
-	const inside = detectFork(input({ argument: "read ~/work/agentFleet/src/fleet/detect.ts", cwd: TREE }));
+	const inside = detectFork(input({ argument: "read ~/work/fleet-supervisor/src/fleet/detect.ts", cwd: TREE }));
 	assert.deepEqual(inside, []);
 
 	const outside = detectFork(input({ argument: "read ~/notes.md" }));
@@ -463,22 +463,22 @@ test("an invalid AGENTFLEET_ASK falls back to fork", () => {
 
 test("policy.json supplies the per-group overrides", () => {
 	const state = tempDir();
-	writeFileSync(join(state, "policy.json"), JSON.stringify({ askByGroup: { agentFleet: "always", home: "never" } }));
+	writeFileSync(join(state, "policy.json"), JSON.stringify({ askByGroup: { "fleet-supervisor": "always", home: "never" } }));
 
 	const config = loadConfig(env({ AGENTFLEET_STATE_DIR: state, AGENTFLEET_ASK: "fork" }));
 
-	assert.deepEqual(config.askByGroup, { agentFleet: "always", home: "never" });
-	assert.equal(askPolicyFor(config, "agentFleet"), "always");
+	assert.deepEqual(config.askByGroup, { "fleet-supervisor": "always", home: "never" });
+	assert.equal(askPolicyFor(config, "fleet-supervisor"), "always");
 	assert.equal(askPolicyFor(config, "repo"), "fork");
 });
 
 test("a bare map in policy.json is accepted and junk entries are ignored", () => {
 	const state = tempDir();
-	writeFileSync(join(state, "policy.json"), JSON.stringify({ agentFleet: "often", junk: "sometimes", count: 2 }));
+	writeFileSync(join(state, "policy.json"), JSON.stringify({ "fleet-supervisor": "often", junk: "sometimes", count: 2 }));
 
 	const config = loadConfig(env({ AGENTFLEET_STATE_DIR: state }));
 
-	assert.deepEqual(config.askByGroup, { agentFleet: "often" });
+	assert.deepEqual(config.askByGroup, { "fleet-supervisor": "often" });
 	assert.equal(askPolicyFor(config, "junk"), "fork");
 });
 

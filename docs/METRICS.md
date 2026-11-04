@@ -9,7 +9,7 @@ optimisation pass actually starts with.
 node src/metrics/report.ts                 # last 24h, all groups, human tables
 node src/metrics/report.ts --window=1h     # last hour
 node src/metrics/report.ts --window=all    # the whole log
-node src/metrics/report.ts --group=agentFleet
+node src/metrics/report.ts --group=fleet-supervisor
 node src/metrics/report.ts --json          # the same numbers as a stable object
 ```
 

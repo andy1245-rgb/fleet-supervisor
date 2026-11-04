@@ -11,7 +11,7 @@ const SHA = "testsha";
 function input(id: string): DecisionInput {
 	return {
 		paneId: `pane-${id}`,
-		cwd: "/home/andrew/agentFleet",
+		cwd: "/home/operator/work/fleet-supervisor",
 		status: "idle",
 		title: "scored the matrix",
 		intent: "price abandonment",

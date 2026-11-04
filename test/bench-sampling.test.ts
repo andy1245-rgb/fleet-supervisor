@@ -7,7 +7,7 @@ import type { Decision, DecisionInput, Op } from "../src/decision/types.ts";
 function input(id: string): DecisionInput {
 	return {
 		paneId: `pane-${id}`,
-		cwd: "/home/andrew/agentFleet",
+		cwd: "/home/operator/work/fleet-supervisor",
 		status: "idle",
 		title: "pinned the sampler",
 		intent: "make the subset measurable",
