@@ -12,7 +12,12 @@ A supervisor for a fleet of live agent panes. It observes them through `herdr`, 
 
 **What is out of scope.** `declare_done` has zero targets in the mined corpus, so no variant can learn it and its column is `n/a` everywhere. `leave` has 7 rows corpus-wide, so any 10-point move on it is one row. The regret ranking is not publishable: the cost weights are asserted, unitless and unswept (`weightsSwept: false`). And no decision here has been scored against what a supervised fleet actually did next — the labels are reconstructed from transcripts, so this measures models against proxies.
 
-**The question that decides the next step.** Whether a refusal is the grounding gate withholding a proposal, or the decode producing nothing at all, is still unmeasured for these records: `suppressed` was computed by the sidecar and then discarded until this change began persisting it. The two have opposite fixes, and only the second is a fine-tuning problem.
+**The question that decides the next step — now measured, on n = 6.** A refusal can be the grounding gate withholding a proposal the model made (`suppressed > 0`), or a decode that produced nothing (`suppressed == 0`), and the two need different fixes. `suppressed` was computed by the sidecar and discarded until this change persisted it, so the historical records cannot answer it. A first run that captures it — `bench/results/2026-11-04T11-04-36-485Z__needle3.json`, n = 6, taken on a heavily loaded box so its latency columns are not comparable to anything — splits cleanly in two:
+
+- **4 of 6 are suppressions.** The model emitted a call and grounding rejected it, at confidence 0.002–0.006. The argument did not survive the grounding check.
+- **2 of 6 are genuine no-calls, at high confidence** (0.331, 0.338), and the model says why: *"No tool available for creating or managing a project. The request is for a project management task which is not supported by any available tool."* That is a task-framing prior — the model does not believe supervising a pane maps onto `leave` / `nudge` / `declare_done` / `flag` at all.
+
+So this is not a parse failure and not one bug. The high-confidence no-calls are exactly what a fine-tune on this corpus teaches, since the corpus is 502 examples of that mapping. The low-confidence suppressions are a span problem: a target argument that is not a substring of the query gets suppressed, which is the failure the `keptTail` fix in `finetune/dataset.ts` was written for. n = 6 is a signal, not a result — the 22-row confirmation is pending a machine not running other builds.
 
 ## Architecture
 

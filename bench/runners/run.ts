@@ -475,8 +475,8 @@ export function tracesToJsonl(traces: readonly TaskTrace[]): string {
 	return traces.map((trace) => `${JSON.stringify(trace)}\n`).join("");
 }
 
-function buildModel(name: string): DecisionModel {
-	if (name === "needle3" || name === "needle") return needleModel();
+function buildModel(name: string, timeoutMs?: number): DecisionModel {
+	if (name === "needle3" || name === "needle") return needleModel(timeoutMs ? { timeoutMs } : {});
 	const model = name.startsWith("openrouter:") ? name.slice("openrouter:".length) : name;
 	return openRouterModel({ model });
 }
@@ -499,7 +499,7 @@ function freezeTaskSet(path: string, sha: string): string {
 	return relative(join(ROOT, ".."), join(dir, name));
 }
 
-export async function bench(modelName: string, limit?: number, tag = "", taskset?: string): Promise<BenchRecord> {
+export async function bench(modelName: string, limit?: number, tag = "", taskset?: string, timeoutMs?: number): Promise<BenchRecord> {
 	const taskPath = taskset ? join(ROOT, "..", taskset) : join(ROOT, "tasks", "tasks.jsonl");
 	const { tasks, sha } = loadTasks(taskPath);
 	// Stratified by expectedOp rather than strided: the file is ordered by session,
@@ -507,7 +507,7 @@ export async function bench(modelName: string, limit?: number, tag = "", taskset
 	// entirely at any small limit.
 	const sample = sampleStratified(tasks, limit ?? tasks.length);
 	if (sample.note) console.error(`bench: ${sample.note}`);
-	const model = buildModel(modelName);
+	const model = buildModel(modelName, timeoutMs);
 	const decisions: Decision[] = [];
 	for (const task of sample.tasks) {
 		decisions.push(await model.decide(task.input));
@@ -535,7 +535,14 @@ async function main(): Promise<void> {
 	const limitArg = args.find((a) => a.startsWith("--limit="));
 	const limit = limitArg ? Number(limitArg.split("=")[1]) : undefined;
 	const tasksetArg = args.find((a) => a.startsWith("--taskset="));
-	await bench(modelArg, limit, "cli", tasksetArg?.split("=")[1]);
+	const timeoutArg = args.find((a) => a.startsWith("--timeout-ms="));
+	const timeoutMs = timeoutArg ? Number(timeoutArg.split("=")[1]) : undefined;
+	// A raised cap is stated in the record: it makes the run answerable on a shared
+	// box, and it makes the latency columns unusable, so the record has to say which.
+	const note = timeoutMs
+		? `cli; adapter timeout ${timeoutMs}ms, so latency here is not comparable to a default-cap run`
+		: "cli";
+	await bench(modelArg, limit, note, tasksetArg?.split("=")[1], timeoutMs);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

@@ -1,0 +1,105 @@
+{
+	"recordedAt": "2026-11-04T11:04:36.485Z",
+	"model": "needle3",
+	"taskSetSha": "b9765d1a55e18b4e",
+	"taskSetPath": "bench/tasks/2026-10-26.b9765d1a55e18b4e.jsonl",
+	"n": 6,
+	"ops": {
+		"exactMatch": 0.3333,
+		"perOpRecall": {
+			"flag": 1,
+			"nudge": 0,
+			"leave": 0
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"matrix": {
+			"leave": {
+				"leave": 0,
+				"nudge": 5,
+				"declare_done": 4,
+				"flag": 2
+			},
+			"nudge": {
+				"leave": 6,
+				"nudge": 0,
+				"declare_done": 4,
+				"flag": 1
+			},
+			"declare_done": {
+				"leave": 5,
+				"nudge": 5,
+				"declare_done": 0,
+				"flag": 2
+			},
+			"flag": {
+				"leave": 6,
+				"nudge": 1,
+				"declare_done": 1,
+				"flag": 0
+			}
+		},
+		"total": 5,
+		"perTask": 0.8333,
+		"weightsSwept": false
+	},
+	"usableOutputRate": 0,
+	"accuracyGivenUsable": {
+		"value": null,
+		"n": 0
+	},
+	"baselines": {
+		"alwaysLeave": {
+			"exactMatch": 0.1667,
+			"regretPerTask": 5
+		},
+		"alwaysNudge": {
+			"exactMatch": 0.5,
+			"regretPerTask": 1.1667
+		},
+		"alwaysDeclareDone": {
+			"exactMatch": 0,
+			"regretPerTask": 3
+		},
+		"alwaysFlag": {
+			"exactMatch": 0.3333,
+			"regretPerTask": 0.8333
+		}
+	},
+	"latencyMs": {
+		"p50": 70825,
+		"p95": 228503
+	},
+	"costUsd": {
+		"total": 0,
+		"per1k": 0
+	},
+	"refusals": 6,
+	"coverage": {
+		"sampledPerOp": {
+			"flag": 2,
+			"nudge": 3,
+			"leave": 1
+		},
+		"corpusPerOp": {
+			"flag": 89,
+			"nudge": 406,
+			"leave": 7
+		}
+	},
+	"notes": "cli; adapter timeout 300000ms, so latency here is not comparable to a default-cap run"
+}
