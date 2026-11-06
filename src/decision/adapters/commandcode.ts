@@ -34,7 +34,7 @@ const BASE_URL = "https://api.commandcode.ai/provider/v1";
  *  with HTTP 400 on this wire (`none` is the value that stops reasoning).
  *
  *  `none` is a request parameter, not a decode lever. Measured on one 145,746-byte
- *  body (P4-7oh §6.1): `effort: "high"` → `"none"` with no other field changed cut
+ *  body: `effort: "high"` → `"none"` with no other field changed cut
  *  the *prompt* from 35,830 to 30,099 tokens, because with `none` the provider stops
  *  rendering the replayed reasoning items. So an experiment that flips it is not
  *  comparing two decodes of one input; it is comparing two inputs. Never tune it as

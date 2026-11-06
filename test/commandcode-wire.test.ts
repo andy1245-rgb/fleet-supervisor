@@ -88,8 +88,8 @@ test("reasoning.effort is a value this provider accepts", () => {
 	// `off` is the value this wire rejects with HTTP 400, so it is not in the set.
 	assert.equal((EFFORTS as readonly string[]).includes("off"), false);
 	// `none` is legal but it is not a decode lever: on one 145,746-byte body it cut the
-	// prompt from 35,830 to 30,099 tokens by stopping the replay of reasoning items
-	// (P4-7oh §6.1), so it changes the request the model is scored on. The adapter
+	// prompt from 35,830 to 30,099 tokens by stopping the replay of reasoning items,
+	// so it changes the request the model is scored on. The adapter
 	// sends it as one field and nothing else moves.
 	assert.deepEqual({ ...buildRequest(INPUT, { model: MODEL, effort: "none" }), reasoning: body().reasoning }, body());
 });
