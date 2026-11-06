@@ -16,7 +16,7 @@
     "content": [
      {
       "type": "input_text",
-      "text": "pane: w2C:p3\ncwd: /home/andrew/work/fleet-supervisor\nstatus: idle\ntitle: pi - implement the responses adapter\nintent: add a hosted commandcode adapter without changing the default primary\nphase: implement\nacceptance: npx tsc --noEmit exits 0 and npm test passes\nclaimed state: working\nlast completed: wrote test/commandcode-wire.test.ts\nidle ticks: 3\nterminal tail:\n$ npx tsc --noEmit\nsrc/decision/adapters/responses.ts(41,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.\n\n> next: fix the narrow, then run the wire test"
+      "text": "pane: w2C:p3\ncwd: /home/operator/work/fleet-supervisor\nstatus: idle\ntitle: pi - implement the responses adapter\nintent: add a hosted commandcode adapter without changing the default primary\nphase: implement\nacceptance: npx tsc --noEmit exits 0 and npm test passes\nclaimed state: working\nlast completed: wrote test/commandcode-wire.test.ts\nidle ticks: 3\nterminal tail:\n$ npx tsc --noEmit\nsrc/decision/adapters/responses.ts(41,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.\n\n> next: fix the narrow, then run the wire test"
      }
     ]
    }

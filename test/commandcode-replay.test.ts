@@ -30,7 +30,7 @@ const sse = JSON.parse(readFileSync(join(FIXTURES, "commandcode-decision.sse.jso
  *  reconstruction against the recorded request, so it cannot rot silently. */
 const CAPTURED_INPUT: DecisionInput = {
 	paneId: "w2C:p3",
-	cwd: "/home/andrew/work/fleet-supervisor",
+	cwd: "/home/operator/work/fleet-supervisor",
 	status: "idle",
 	title: "pi - implement the responses adapter",
 	intent: "add a hosted commandcode adapter without changing the default primary",

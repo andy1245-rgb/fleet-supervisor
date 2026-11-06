@@ -156,7 +156,7 @@ test("the adapter's body is the recorded body, minus the field the provider igno
 	// pinned by it too.
 	const capturedInput: DecisionInput = {
 		paneId: "w2C:p3",
-		cwd: "/home/andrew/work/fleet-supervisor",
+		cwd: "/home/operator/work/fleet-supervisor",
 		status: "idle",
 		title: "pi - implement the responses adapter",
 		intent: "add a hosted commandcode adapter without changing the default primary",
