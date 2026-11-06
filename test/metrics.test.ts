@@ -770,7 +770,7 @@ test("one tick writes rows the report can read, with the gate's verdict on the a
 				port: fakePort(agent),
 				notifier: { async send() {} },
 				config,
-				models: { primary: fixedModel("primary", { op: "declare_done", argument: "the work is pinned" }), escalator: fixedModel("escalator", {}) },
+				models: { primary: fixedModel("primary", { op: "declare_done", argument: "the work is pinned" }), escalator: fixedModel("escalator", { op: "declare_done", argument: "the work is pinned" }) },
 			});
 
 			const store = openStore(config.eventsPath);
@@ -789,7 +789,7 @@ test("one tick writes rows the report can read, with the gate's verdict on the a
 			assert.equal(decision.held, true);
 			assert.equal(decision.policy, "fork");
 			assert.equal(decision.group, "fleet-supervisor");
-			assert.equal(decision.decision, "declare_done(the work is pinned) via primary conf 0.90", "the human-readable summary rides on the row");
+			assert.equal(decision.decision, "declare_done(the work is pinned) via escalator conf 0.90", "the human-readable summary rides on the row, naming the model that decided — and declare_done is always cross-checked (R3), so that is the escalator's");
 
 			assert.equal(action.disposition, "held");
 			assert.equal(action.gated, true);
@@ -803,7 +803,7 @@ test("one tick writes rows the report can read, with the gate's verdict on the a
 
 			assert.equal(tickEvent.held, 1);
 			assert.equal(tickEvent.decisions, 1);
-			assert.deepEqual(tickEvent.models, ["primary"]);
+			assert.deepEqual(tickEvent.models, ["escalator", "primary"], "declare_done is cross-checked, so both models were consulted");
 			assert.equal(tickEvent.asks, 1, "the legacy key is still on the row");
 
 			// The human-readable log the operator already reads is untouched: the

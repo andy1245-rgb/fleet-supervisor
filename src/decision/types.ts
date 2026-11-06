@@ -31,7 +31,8 @@ export interface Decision {
 	op: Op;
 	/** nudge → the instruction; declare_done → summary; flag → problem; leave → reason. */
 	argument: string;
-	/** Model's own confidence, 0..1. The ladder's routing signal. */
+	/** Model's own confidence, 0..1. Recorded, never routed on: escalation is decided
+	 *  by facts about the answer (see decision/escalation.ts), not by this number. */
 	confidence: number;
 	model: string;
 	costUsd: number;

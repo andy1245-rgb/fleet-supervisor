@@ -324,10 +324,10 @@ function fakePort(agents: readonly HerdrAgent[]): HerdrPort {
 	};
 }
 
-function leaveModel(): DecisionModel {
+function leaveModel(name = "primary"): DecisionModel {
 	const decision: Decision = { op: "leave", argument: "still on the current step", confidence: 0.9, model: "primary", costUsd: 0, latencyMs: 1, refused: false, raw: '{"op":"leave"}' };
 	return {
-		name: "primary",
+		name,
 		costPerCallUsd: 0,
 		async decide(_input: DecisionInput): Promise<Decision> {
 			return decision;
@@ -365,7 +365,7 @@ async function runTick(dir: string, agents: readonly HerdrAgent[]): Promise<void
 	process.env.AGENTFLEET_REGISTRY = join(dir, "registry");
 	process.env.AGENTFLEET_STATE = join(dir, "marks.json");
 	try {
-		await tick({ port: fakePort(agents), notifier: SILENT, config: liveConfig(dir), models: { primary: leaveModel(), escalator: leaveModel() } });
+		await tick({ port: fakePort(agents), notifier: SILENT, config: liveConfig(dir), models: { primary: leaveModel(), escalator: leaveModel("escalator") } });
 	} finally {
 		if (saved.registry === undefined) delete process.env.AGENTFLEET_REGISTRY;
 		else process.env.AGENTFLEET_REGISTRY = saved.registry;
@@ -436,7 +436,7 @@ test("a flag is silent, so it is tracked even though its action row says skipped
 				return flagged;
 			},
 		};
-		await tick({ port: fakePort([agent("p1", { status: "idle", completionSeq: 2 })]), notifier: SILENT, config: liveConfig(dir), models: { primary: model, escalator: model } });
+		await tick({ port: fakePort([agent("p1", { status: "idle", completionSeq: 2 })]), notifier: SILENT, config: liveConfig(dir), models: { primary: model, escalator: { ...model, name: "escalator" } } });
 
 		const open = parsePending(readFileSync(pendingPath(join(dir, "events.jsonl")), "utf8"));
 		assert.equal(open.get("p1")?.op, "flag", "a flag asked the pane for nothing, so its silence is judgeable");
@@ -472,7 +472,7 @@ test("a dry tick records no open decision, so a rehearsal never becomes evidence
 	process.env.AGENTFLEET_STATE = join(dir, "marks.json");
 	try {
 		const config: Config = { ...liveConfig(dir), dry: true };
-		await tick({ port: fakePort([agent("p1", { status: "idle", completionSeq: 2 })]), notifier: SILENT, config, models: { primary: leaveModel(), escalator: leaveModel() } });
+		await tick({ port: fakePort([agent("p1", { status: "idle", completionSeq: 2 })]), notifier: SILENT, config, models: { primary: leaveModel(), escalator: leaveModel("escalator") } });
 		assert.throws(() => readFileSync(pendingPath(join(dir, "events.jsonl")), "utf8"), /ENOENT/, "a dry tick leaves no pending.json behind");
 	} finally {
 		if (saved.registry === undefined) delete process.env.AGENTFLEET_REGISTRY;

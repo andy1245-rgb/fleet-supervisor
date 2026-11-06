@@ -105,12 +105,12 @@ function tickEvent(dir: string): SeqEvent {
 
 /** Runs one tick in a throwaway state dir: the manager reads its registry and its
  *  marks from the environment, so both are pointed at the temp dir and restored. */
-async function runTick(dir: string, primary: DecisionModel, escalator: DecisionModel): Promise<TickReport> {
+async function runTick(dir: string, primary: DecisionModel, escalator: DecisionModel, agents: readonly HerdrAgent[] = AGENTS): Promise<TickReport> {
 	const saved = { registry: process.env.AGENTFLEET_REGISTRY, state: process.env.AGENTFLEET_STATE };
 	process.env.AGENTFLEET_REGISTRY = join(dir, "registry");
 	process.env.AGENTFLEET_STATE = join(dir, "marks.json");
 	try {
-		return await tick({ port: fakePort(AGENTS), notifier: SILENT, config: testConfig(dir), models: { primary, escalator } });
+		return await tick({ port: fakePort(agents), notifier: SILENT, config: testConfig(dir), models: { primary, escalator } });
 	} finally {
 		if (saved.registry === undefined) delete process.env.AGENTFLEET_REGISTRY;
 		else process.env.AGENTFLEET_REGISTRY = saved.registry;
@@ -130,9 +130,11 @@ async function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
 
 test("an escalator outage is counted as an escalation, and as a failed one", async () => {
 	await withDir(async (dir) => {
+		// A needle refusal carries no usable argument, which is R1: the primary could not
+		// stand behind an op, so the second call is earned regardless of any number.
 		const report = await runTick(
 			dir,
-			fakeModel("primary", decision({ op: "leave", confidence: 0.1 })),
+			fakeModel("primary", decision({ op: "leave", argument: "", confidence: 0.1, refused: true })),
 			fakeModel("escalator", new Error("OPENROUTER_API_KEY is not set")),
 		);
 
@@ -156,7 +158,7 @@ test("a successful escalation is one escalation and zero failures", async () => 
 	await withDir(async (dir) => {
 		const report = await runTick(
 			dir,
-			fakeModel("primary", decision({ op: "leave", confidence: 0.1 })),
+			fakeModel("primary", decision({ op: "leave", argument: "", confidence: 0.1, refused: true })),
 			fakeModel("escalator", decision({ op: "leave", argument: "the escalator agrees", confidence: 0.8, model: "escalator" })),
 		);
 
@@ -185,5 +187,27 @@ test("a confident primary escalates nothing and fails nothing", async () => {
 		const written = tickEvent(dir);
 		assert.equal(written.escalated, 0);
 		assert.equal(written.escalationFailed, 0);
+	});
+});
+
+test("a collision trigger reaches the decision, so the pane it names escalates", async () => {
+	await withDir(async (dir) => {
+		// R4 is the one rule the decision call cannot see for itself: it is a fact about
+		// the fleet, handed down by the trigger scan. Two working panes in one tree.
+		const colliding = [agent("p1", { status: "working", completionSeq: 2 }), agent("p2", { status: "working", completionSeq: 2 })];
+		const report = await runTick(
+			dir,
+			fakeModel("primary", decision({ op: "leave", confidence: 1 })),
+			fakeModel("escalator", decision({ op: "leave", argument: "the escalator sees the collision", model: "escalator" })),
+			colliding,
+		);
+
+		assert.equal(report.triggers.filter((trigger) => trigger.kind === "collision").length, 1, "one collision, naming both panes");
+		assert.equal(report.decisions.length, 2);
+		assert.equal(report.escalated, 2, "the collision earned a second call on each pane it names");
+		assert.deepEqual(
+			report.decisions.map((entry) => entry.argument),
+			["the escalator sees the collision", "the escalator sees the collision"],
+		);
 	});
 });

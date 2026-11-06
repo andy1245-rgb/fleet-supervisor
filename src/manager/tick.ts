@@ -1,8 +1,9 @@
 // One supervisor tick: observe, decide who moved, ask or act, record.
 //
-// Cost discipline lives in the ladder: a decision call happens only for an agent
-// whose sequence numbers advanced, and the escalator only for cases the primary
-// refused or scored low. Everything else is one `agent list` call.
+// Cost discipline lives in the escalation rules: a decision call happens only for an
+// agent whose sequence numbers advanced, and the escalator only for an answer the
+// primary could not stand behind (see ../decision/escalation.ts). Everything else is
+// one `agent list` call.
 //
 // Ask discipline lives in ./ask.ts and ./config.ts: whether an action is taken
 // now or parked for the operator is a per-group policy, and a parked action is
@@ -16,7 +17,8 @@ import type { HerdrAgent, HerdrPort } from "../herdr/types.ts";
 import { detect, loadMarks, saveMarks, type Marks } from "../fleet/detect.ts";
 import { groupOf } from "../fleet/groups.ts";
 import { readClaims, writeClaim, type Claim } from "../fleet/registry.ts";
-import { decideWithEscalation } from "../decision/ladder.ts";
+import { commandcodeModel } from "../decision/adapters/commandcode.ts";
+import { decideWithEscalation } from "../decision/escalation.ts";
 import { needleModel } from "../decision/needle.ts";
 import { openRouterModel } from "../decision/openrouter.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../decision/types.ts";
@@ -189,23 +191,37 @@ function recordClaim(config: Config, agent: HerdrAgent, claim: Claim | undefined
 	);
 }
 
-/** Maps a config model name to an adapter. */
+/** Maps a config model name to an adapter. A `commandcode/` prefix names the responses
+ *  wire; everything else keeps the chat-completions path it had. */
 export function buildModel(name: string): DecisionModel {
 	const trimmed = name.trim();
 	if (trimmed === "needle3" || trimmed === "needle") return needleModel();
+	if (trimmed.startsWith("commandcode/")) return commandcodeModel({ model: trimmed.slice("commandcode/".length) });
 	const model = trimmed.startsWith("openrouter:") ? trimmed.slice("openrouter:".length) : trimmed;
 	return openRouterModel({ model });
 }
 
-/** Builds the pair the ladder needs, degrading to the escalator alone when the
- *  local engine is unavailable — a missing venv must not stop the supervisor. */
-export function buildLadderModels(config: Config): { primary: DecisionModel; escalator: DecisionModel; degraded?: string } {
+/** Builds the pair escalation needs, degrading to the escalator alone when the
+ *  local engine is unavailable — a missing venv must not stop the supervisor.
+ *
+ *  `escalator` is the model the tier-2 inspector borrows; `falsifier` is the same model
+ *  in the role escalation needs. They diverge only in the degraded case: the model still
+ *  exists and can inspect, but it is the primary itself, so there is nothing to falsify
+ *  with and escalation is off. */
+export function buildLadderModels(config: Config): { primary: DecisionModel; escalator: DecisionModel; falsifier: DecisionModel | undefined; degraded?: string } {
 	const escalator = buildModel(config.escalator);
-	if (config.primary === config.escalator) return { primary: escalator, escalator };
+	// A pair the operator configured as one model is handed over whole: escalation.ts
+	// refuses a same-family pair loudly, and that refusal must not be papered over here.
+	if (config.primary === config.escalator) return { primary: escalator, escalator, falsifier: escalator };
 	try {
-		return { primary: buildModel(config.primary), escalator };
+		return { primary: buildModel(config.primary), escalator, falsifier: escalator };
 	} catch (e) {
-		return { primary: escalator, escalator, degraded: `primary ${config.primary} unavailable: ${(e as Error).message}` };
+		return {
+			primary: escalator,
+			escalator,
+			falsifier: undefined,
+			degraded: `primary ${config.primary} unavailable: ${(e as Error).message}; no falsifier, so escalation is off`,
+		};
 	}
 }
 
@@ -346,7 +362,7 @@ export async function askGate(args: GateArgs): Promise<GateOutcome> {
 		why: record.why,
 		forks: record.forks,
 	});
-	await args.notifier.send(askMessage(record), "action");
+	await args.notifier.send(askMessage(record), "action").catch(() => undefined);
 	return { held: true, policy, why: gate.why, forks: gate.forks, record };
 }
 
@@ -612,12 +628,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const { triggers, history: nextHistory } = scanTriggers(agents, claims, idleTicks, historyMap);
 
 	const cooldowns = readJson<Record<string, number>>(config.cooldownsPath, {});
-	const built = deps.models ? { ...deps.models, degraded: undefined } : buildLadderModels(config);
-	const { primary, escalator, degraded } = built;
+	const built = deps.models ? { ...deps.models, falsifier: deps.models.escalator, degraded: undefined } : buildLadderModels(config);
+	const { primary, escalator, falsifier, degraded } = built;
 	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry };
 	const pending = pendingAsks(readAskLog(config.asksPath));
 
-	if (degraded) await notifier.send(degraded, "alert");
+	if (degraded) await notifier.send(degraded, "alert").catch(() => undefined);
 
 	// Per-agent decisions only for panes that moved this tick.
 	const decided = await pool(moves, config.concurrency, async (move) => {
@@ -629,7 +645,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			tail = `(terminal read failed: ${(e as Error).message})`;
 		}
 		const input = toInput(move.agent, claim, tail, move.idleTicks);
-		const result = await decideWithEscalation(input, { primary, escalator, threshold: config.threshold });
+		const result = await decideWithEscalation(input, { primary, escalator: falsifier, triggers });
 		return { move, claim, input, result };
 	});
 
@@ -684,7 +700,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			// flag is already a request for a human, so it is reported rather than
 			// gated: holding it would mean holding a notification.
 			appendEvent(config, { kind: "flag", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision) });
-			await notifier.send(`${entry.move.paneId} (${group}) needs a decision\n${decision.argument}`, "alert");
+			await notifier.send(`${entry.move.paneId} (${group}) needs a decision\n${decision.argument}`, "alert").catch(() => undefined);
 			action = { disposition: "skipped", reason: "flag-reported", latencyMs: 0, gated: false };
 		} else if (decision.op === "declare_done") {
 			const gate = await gated();
@@ -709,7 +725,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 					writeClaim(claim);
 				}
 				appendEvent(config, { kind: "done", paneId: entry.move.paneId, group, text: decision.argument, policy: gate.policy, why: gate.why });
-				await notifier.send(`${entry.move.paneId} (${group}) finished\n${decision.argument}`, "info");
+				await notifier.send(`${entry.move.paneId} (${group}) finished\n${decision.argument}`, "info").catch(() => undefined);
 				action = { disposition: config.dry ? "dry" : "sent", reason: config.dry ? "dry" : "ok", latencyMs: 0, gated: true };
 			}
 		} else {
@@ -737,7 +753,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 					report.promptsSent += 1;
 					if (sent.disposition === "rejected") {
 						appendEvent(config, { kind: "nudge_rejected", paneId: entry.move.paneId, reason: sent.reason ?? "unknown" });
-						await notifier.send(`${entry.move.paneId} refused the prompt (${sent.reason ?? "unknown"}) — it needs you`, "alert");
+						await notifier.send(`${entry.move.paneId} refused the prompt (${sent.reason ?? "unknown"}) — it needs you`, "alert").catch(() => undefined);
 						action = { disposition: "rejected", reason: sent.reason ?? "unknown", latencyMs, gated: true };
 					} else {
 						cooldowns[entry.move.paneId] = nowMs();
@@ -810,7 +826,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		for (const trigger of triggers) {
 			// Churn was log-only before Tier 2 and stays log-only with the inspector off.
 			if (trigger.kind === "churn") continue;
-			await notifier.send(`[${trigger.kind}] ${trigger.group}: ${trigger.detail}`, "action");
+			await notifier.send(`[${trigger.kind}] ${trigger.group}: ${trigger.detail}`, "action").catch(() => undefined);
 		}
 	} else {
 		const ranked = rankTriggers(triggers);
@@ -822,13 +838,15 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				inspected: inspecting.length,
 				skipped: ranked.slice(inspecting.length).map((trigger) => `${trigger.kind}:${trigger.group}`),
 			});
-			await notifier.send(
-				`${ranked.length} triggers fired, ${inspecting.length} inspected (cap ${config.maxInspectionsPerTick}): ${ranked
-					.slice(inspecting.length)
-					.map((trigger) => `${trigger.kind} ${trigger.group}`)
-					.join(", ")}`,
-				"info",
-			);
+			await notifier
+				.send(
+					`${ranked.length} triggers fired, ${inspecting.length} inspected (cap ${config.maxInspectionsPerTick}): ${ranked
+						.slice(inspecting.length)
+						.map((trigger) => `${trigger.kind} ${trigger.group}`)
+						.join(", ")}`,
+					"info",
+				)
+				.catch(() => undefined);
 		}
 
 		for (const trigger of inspecting) {
@@ -876,7 +894,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 					degraded: finding.degraded,
 				}),
 			);
-			await notifier.send(formatFinding(finding), "action");
+			await notifier.send(formatFinding(finding), "action").catch(() => undefined);
 
 			const proposed = finding.proposed;
 			if (!proposed) continue;
@@ -908,7 +926,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				// schema names, so the legacy line gains `schema` and `stalled` rather
 				// than being duplicated beside a structured copy of itself.
 				appendMetric(config, makeWatchdog(findingFields(sample, verdict)));
-				await notifier.send(`[${verdict.rule}] pid ${sample.pid} running ${formatAge(sample.elapsedMs)}\n${verdict.why}\n${sample.command.slice(0, 160)}`, "action");
+				await notifier.send(`[${verdict.rule}] pid ${sample.pid} running ${formatAge(sample.elapsedMs)}\n${verdict.why}\n${sample.command.slice(0, 160)}`, "action").catch(() => undefined);
 			}
 		} catch (e) {
 			appendEvent(config, { kind: "watchdog_error", error: (e as Error).message });

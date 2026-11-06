@@ -1,3 +1,8 @@
+// RETIRED as of phase 2: no longer imported by anything under `src/`. Escalation is
+// decided by the four rules in ./escalation.ts, which never read a self-reported
+// confidence; this file is kept for exactly this commit so that diff is reviewable,
+// and `test/ladder.test.ts` keeps it honest until it is deleted.
+//
 // Escalation ladder. The primary model answers everything; anything it refuses
 // or is unsure about is re-asked of the escalator. Exactly one escalation, so a
 // bad primary can never multiply cost per decision.
@@ -25,6 +30,8 @@ export interface LadderResult {
 	trail: Decision[];
 }
 
+/** @deprecated Retired by `./escalation.ts`; kept for one commit so the phase-2 diff
+ *  is reviewable. Nothing under `src/` imports this module. */
 export async function decideWithEscalation(input: DecisionInput, options: LadderOptions): Promise<LadderResult> {
 	const first = await options.primary.decide(input);
 	const trail = [first];
