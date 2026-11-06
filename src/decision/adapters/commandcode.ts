@@ -28,6 +28,13 @@ import { responsesReader, type ResponsesOutcome, type ResponsesUsage } from "./r
  *  at 512 the reasoning models in this family burned the budget and answered nothing. */
 export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
+/** Per-call deadline. 90 s, not the 20 s the local engine tolerated: on the most faithful
+ *  body in the run, a 45 s deadline censored 5 of 6 attempts and 4 of 4 completed at 120 s
+ *  — two of them at 62.1 s and 64.6 s — so the probe policy for this model is "budget
+ *  ≥ 90 s, not 20 s and not 45 s" (`P3-liveness.md §4`). A 20 s cap therefore records a
+ *  timeout on a success, which is a wrong measurement rather than a saving. */
+export const DEFAULT_TIMEOUT_MS = 90_000;
+
 const BASE_URL = "https://api.commandcode.ai/provider/v1";
 
 /** Exactly the values this provider accepts. `off` is not one of them: it is rejected
@@ -304,7 +311,7 @@ export interface CommandCodeModel extends DecisionModel {
 
 export function commandcodeModel(options: CommandCodeOptions): CommandCodeModel {
 	const baseUrl = options.baseUrl ?? BASE_URL;
-	const timeoutMs = options.timeoutMs ?? 20_000;
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const model = options.model;
 	// Resolved at construction so a machine without a credential degrades the ladder
 	// (buildLadderModels catches this) instead of failing one decision at a time.

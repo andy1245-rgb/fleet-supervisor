@@ -28,14 +28,70 @@
 // findings per tick, worst first, so a fleet-wide flap cannot become a
 // fleet-wide spend. Nothing here lets an inspection act: a finding is a proposal
 // and the ask gate still decides.
+//
+// `dailyCostCapUsd` is the one limit that is not per tick or per pane, and it is
+// the only one that bounds a day. `AGENTFLEET_MAX_PROMPTS=3` at a 60 s interval
+// still permits 4,320 prompts a day by construction; a dollar ceiling is what makes
+// that a number and not an unbounded one. It is checked in ./tick.ts before the
+// first model call.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_TIMEOUT_MS, EFFORTS, type ReasoningEffort } from "../decision/adapters/commandcode.ts";
 import { isAskPolicy, normalizePolicy, type AskPolicy } from "./ask.ts";
 
 /** How far the manager goes when a cross-agent trigger fires. */
 export type InspectorMode = "off" | "cheap" | "deep";
+
+/** `reasoning.effort` for a hosted decision call. `low`, deliberately not `none`.
+ *
+ *  `none` is cheaper and it is legal on this wire, but it was never measured for answer
+ *  quality, and it is not a free choice: it changes the request. On one 145,746-byte
+ *  body, `high` → `none` with no other field touched cut the *prompt* from 35,830 to
+ *  30,099 tokens, because the provider stops rendering replayed reasoning items
+ *  (`P4-7oh.md §6.1`). Turning it down therefore buys a smaller bill and asks a
+ *  different question in the same edit, which is the one thing a default must not do. */
+export const DEFAULT_EFFORT: ReasoningEffort = "low";
+
+/** Anything unrecognised means the default rather than passing through: the provider
+ *  rejects `off` with HTTP 400, and a typo in an env var must not cost a tick. */
+export function normalizeEffort(value: unknown): ReasoningEffort {
+	return typeof value === "string" && (EFFORTS as readonly string[]).includes(value) ? (value as ReasoningEffort) : DEFAULT_EFFORT;
+}
+
+/** A hard ceiling on one local day's model spend, in dollars. `0` disables it.
+ *
+ *  `0.50`, and the arithmetic is the reason: the plan measures a decision at
+ *  $0.000138 and the fleet can raise 6,261 of them in a day, which is ~$0.86 — so
+ *  0.50 stops a runaway at roughly half a normal heavy day without blocking one,
+ *  and leaves the margin for the escalations and inspections that are already
+ *  capped per tick. It is a default, not a policy: the operator raises it with one
+ *  environment variable when he wants the fleet to spend more (see README). */
+export const DEFAULT_DAILY_COST_CAP_USD = 0.5;
+
+/** Dollars, or a rejection.
+ *
+ *  Every other limit in this file falls back to its default on nonsense, because a
+ *  typo in `AGENTFLEET_CONCURRENCY` should not cost a tick. This one is the
+ *  exception: a cap the operator believes he set and did not is the exact failure the
+ *  cap exists to prevent, so `fifty` is an error at startup rather than a silent
+ *  return to 0.50. Deliberately not `Number()`'s grammar — `0x10`, `1e3` and
+ *  `0.5abc` are not dollar amounts an operator typed on purpose. */
+export function parseDailyCostCap(value: string | undefined): number {
+	if (value === undefined || value.trim() === "") return DEFAULT_DAILY_COST_CAP_USD;
+	const text = value.trim();
+	if (!/^(\d+(\.\d*)?|\.\d+)$/.test(text)) {
+		throw new Error(
+			`AGENTFLEET_DAILY_COST_CAP_USD must be a non-negative dollar amount such as "0.50"; 0 disables the cap. Got "${value}"`,
+		);
+	}
+	const n = Number(text);
+	if (!Number.isFinite(n)) {
+		throw new Error(`AGENTFLEET_DAILY_COST_CAP_USD is not a finite number: got "${value}"`);
+	}
+	return n;
+}
 
 export const INSPECTOR_MODES: readonly InspectorMode[] = ["off", "cheap", "deep"];
 
@@ -56,12 +112,18 @@ export interface Config {
 	once: boolean;
 	/** Decide and report, but send no prompts and write no claim files. */
 	dry: boolean;
-	/** Model that decides first: "needle3" or an OpenRouter model id. */
+	/** Model that decides first: a `commandcode/…` id for the responses wire, `needle3`
+	 *  for the retired local engine, or an OpenRouter model id. */
 	primary: string;
 	/** Model consulted when the primary refuses or is unsure. */
 	escalator: string;
 	/** Escalate when primary confidence is below this. */
 	threshold: number;
+	/** `reasoning.effort` on a hosted decision call. */
+	effort: ReasoningEffort;
+	/** Per-call deadline for one decision. 90 s: the hosted call completed in 62.1 s and
+	 *  64.6 s on the faithful-wire arm, so a 20 s cap records a timeout on a success. */
+	decisionTimeoutMs: number;
 	/** Lines of terminal tail handed to a decision model. */
 	readLines: number;
 	/** Concurrent terminal reads + decisions. */
@@ -70,6 +132,10 @@ export interface Config {
 	maxPromptsPerTick: number;
 	/** Minutes before the same pane may be nudged again. */
 	nudgeCooldownMin: number;
+	/** Hard ceiling on one local day's model spend, in dollars. `0` disables it.
+	 *  The only limit here that is not per-tick: a tick that finds the day at or over
+	 *  this makes no model call at all (see `tick.ts`). */
+	dailyCostCapUsd: number;
 	/** How cross-agent triggers are investigated: off, cheap or deep. */
 	inspector: InspectorMode;
 	/** Findings per tick. A trigger storm is inspected worst-first, not in full. */
@@ -134,13 +200,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		intervalMs: num(env.AGENTFLEET_INTERVAL_MS, 60_000),
 		once: bool(env.AGENTFLEET_ONCE),
 		dry: bool(env.AGENTFLEET_DRY),
-		primary: env.AGENTFLEET_PRIMARY || "needle3",
+		// The decision step runs on the hosted model. AGENTFLEET_PRIMARY still selects
+		// anything else, `needle3` included: the local engine is retired from the hot path,
+		// not deleted, and its artefacts go in phase 8.
+		primary: env.AGENTFLEET_PRIMARY || "commandcode/deepseek/deepseek-v4.1-flash",
 		escalator: env.AGENTFLEET_ESCALATOR || "z-ai/glm-5.3-flash",
 		threshold: num(env.AGENTFLEET_THRESHOLD, 0.7),
+		effort: normalizeEffort(env.AGENTFLEET_EFFORT),
+		decisionTimeoutMs: num(env.AGENTFLEET_DECISION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
 		readLines: num(env.AGENTFLEET_READ_LINES, 40),
 		concurrency: num(env.AGENTFLEET_CONCURRENCY, 4),
 		maxPromptsPerTick: num(env.AGENTFLEET_MAX_PROMPTS, 3),
 		nudgeCooldownMin: num(env.AGENTFLEET_COOLDOWN_MIN, 10),
+		dailyCostCapUsd: parseDailyCostCap(env.AGENTFLEET_DAILY_COST_CAP_USD),
 		inspector: normalizeInspectorMode(env.AGENTFLEET_INSPECTOR),
 		maxInspectionsPerTick: num(env.AGENTFLEET_MAX_INSPECTIONS, 2),
 		ask: normalizePolicy(env.AGENTFLEET_ASK),

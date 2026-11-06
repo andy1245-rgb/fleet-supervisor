@@ -3,7 +3,10 @@
 // Cost discipline lives in the escalation rules: a decision call happens only for an
 // agent whose sequence numbers advanced, and the escalator only for an answer the
 // primary could not stand behind (see ../decision/escalation.ts). Everything else is
-// one `agent list` call.
+// one `agent list` call. Above both of those sits the daily cap (../metrics/daily.ts):
+// once the day's recorded spend reaches `AGENTFLEET_DAILY_COST_CAP_USD` the tick makes
+// no model call at all, writes one row that says so, and leaves the moved panes for a
+// tick that can afford them.
 //
 // Ask discipline lives in ./ask.ts and ./config.ts: whether an action is taken
 // now or parked for the operator is a per-group policy, and a parked action is
@@ -17,7 +20,7 @@ import type { HerdrAgent, HerdrPort } from "../herdr/types.ts";
 import { detect, loadMarks, saveMarks, type Marks } from "../fleet/detect.ts";
 import { groupOf } from "../fleet/groups.ts";
 import { readClaims, writeClaim, type Claim } from "../fleet/registry.ts";
-import { commandcodeModel } from "../decision/adapters/commandcode.ts";
+import { commandcodeModel, type ReasoningEffort } from "../decision/adapters/commandcode.ts";
 import { decideWithEscalation } from "../decision/escalation.ts";
 import { needleModel } from "../decision/needle.ts";
 import { openRouterModel } from "../decision/openrouter.ts";
@@ -28,6 +31,7 @@ import { scan as watchdogScan, formatAge, findingFields } from "../watchdog/rule
 import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
 import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
+import { dailySpend } from "../metrics/daily.ts";
 import { inspect, type Finding } from "./inspector.ts";
 import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
 import { DEFAULT_WINDOW_TICKS, decidedAt, isSilent, judge, observedTicks, parsePending, pendingJson, pendingPath, recordPending, type Observation, type PendingDecision } from "../metrics/outcome.ts";
@@ -49,6 +53,14 @@ export interface TickReport {
 	escalationFailed: number;
 	costUsd: number;
 	dry: boolean;
+	/** True when the daily cap skipped this tick's model calls: nothing was
+	 *  consulted, no `decision` row was written, and the panes that moved are still
+	 *  waiting for the next tick that can afford them. */
+	capped: boolean;
+	/** Today's spend, this tick's own cost included, and the cap in force in dollars
+	 *  (`0` when the cap is disabled). */
+	dailyCostUsd: number;
+	dailyCostCapUsd: number;
 }
 
 export interface Deps {
@@ -191,14 +203,24 @@ function recordClaim(config: Config, agent: HerdrAgent, claim: Claim | undefined
 	);
 }
 
+/** What the config hands a decision adapter. `effort` is a parameter of the hosted wire
+ *  only, so an adapter that has no such field ignores it. */
+export interface ModelOptions {
+	effort?: ReasoningEffort;
+	timeoutMs?: number;
+}
+
 /** Maps a config model name to an adapter. A `commandcode/` prefix names the responses
- *  wire; everything else keeps the chat-completions path it had. */
-export function buildModel(name: string): DecisionModel {
+ *  wire; everything else keeps the chat-completions path it had. `needle3` stays
+ *  buildable on purpose — it is retired from the default, not removed. */
+export function buildModel(name: string, options: ModelOptions = {}): DecisionModel {
 	const trimmed = name.trim();
+	// The local engine keeps its own 30 s deadline: the 90 s figure was measured on the
+	// hosted wire, and the engine is retired rather than re-tuned (phase 8 removes it).
 	if (trimmed === "needle3" || trimmed === "needle") return needleModel();
-	if (trimmed.startsWith("commandcode/")) return commandcodeModel({ model: trimmed.slice("commandcode/".length) });
+	if (trimmed.startsWith("commandcode/")) return commandcodeModel({ model: trimmed.slice("commandcode/".length), ...options });
 	const model = trimmed.startsWith("openrouter:") ? trimmed.slice("openrouter:".length) : trimmed;
-	return openRouterModel({ model });
+	return openRouterModel({ model, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
 }
 
 /** Builds the pair escalation needs, degrading to the escalator alone when the
@@ -209,12 +231,16 @@ export function buildModel(name: string): DecisionModel {
  *  exists and can inspect, but it is the primary itself, so there is nothing to falsify
  *  with and escalation is off. */
 export function buildLadderModels(config: Config): { primary: DecisionModel; escalator: DecisionModel; falsifier: DecisionModel | undefined; degraded?: string } {
-	const escalator = buildModel(config.escalator);
+	// The two settings the measurements moved, applied to both decision calls: the
+	// effort default and the per-call deadline are properties of the decision step, not
+	// of one adapter. A name the adapter cannot honour ignores it.
+	const options: ModelOptions = { effort: config.effort, timeoutMs: config.decisionTimeoutMs };
+	const escalator = buildModel(config.escalator, options);
 	// A pair the operator configured as one model is handed over whole: escalation.ts
 	// refuses a same-family pair loudly, and that refusal must not be papered over here.
 	if (config.primary === config.escalator) return { primary: escalator, escalator, falsifier: escalator };
 	try {
-		return { primary: buildModel(config.primary), escalator, falsifier: escalator };
+		return { primary: buildModel(config.primary, options), escalator, falsifier: escalator };
 	} catch (e) {
 		return {
 			primary: escalator,
@@ -607,6 +633,67 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const tickStartedAt = Date.now();
 
 	const agents = await port.list();
+
+	// The daily cap, checked before the first model call and before the bookkeeping
+	// that would otherwise record a decision nobody paid for. A capped tick is one
+	// `agent list` call, one row, and at most one notification.
+	//
+	// `models: []` on the row is how a reader tells that nothing was consulted, and no
+	// `decision` row is written for this tick, because a decision row for a call that
+	// was not made is the lie the quota case already rules out (SPEC §4.9b).
+	//
+	// The marks are deliberately left alone: the panes that moved are still undecided,
+	// and saving their movement here would spend the decision on a tick that could not
+	// make it, so the next tick with money left would find nothing to decide.
+	const spend = dailySpend(config.eventsPath, nowMs());
+	if (config.dailyCostCapUsd > 0 && spend.spentUsd >= config.dailyCostCapUsd) {
+		const capReason = `daily spend cap reached: $${spend.spentUsd.toFixed(6)} spent today against a $${config.dailyCostCapUsd.toFixed(2)} cap (AGENTFLEET_DAILY_COST_CAP_USD)`;
+		// Once a day, not once a tick: at a 60 s interval the letter of "notify once per
+		// tick" is 1,440 messages saying the same thing by midnight, which is a channel
+		// the operator stops reading exactly when it matters. The first capped row is
+		// the marker, and every later tick of the day is silent.
+		if (!spend.notified) {
+			await notifier.send(`fleet: ${capReason}. No model calls until tomorrow; raise the cap to resume sooner.`, "alert").catch(() => undefined);
+		}
+		appendMetric(
+			config,
+			makeTick({
+				agents: agents.length,
+				moved: 0,
+				decisions: 0,
+				escalated: 0,
+				escalationFailed: 0,
+				triggers: 0,
+				inspected: 0,
+				prompts: 0,
+				held: 0,
+				costUsd: 0,
+				durationMs: elapsed(tickStartedAt),
+				models: [],
+				dry: config.dry,
+				capped: true,
+				capReason,
+				dailyCostUsd: spend.spentUsd,
+				dailyCostCapUsd: config.dailyCostCapUsd,
+			}),
+		);
+		return {
+			agents: agents.length,
+			moved: 0,
+			decisions: [],
+			triggers: [],
+			inspected: 0,
+			promptsSent: 0,
+			asks: 0,
+			escalated: 0,
+			escalationFailed: 0,
+			costUsd: 0,
+			dry: config.dry,
+			capped: true,
+			dailyCostUsd: spend.spentUsd,
+			dailyCostCapUsd: config.dailyCostCapUsd,
+		};
+	}
 	const claims = readClaims();
 	const marks: Marks = loadMarks();
 	const { moves, marks: nextMarks } = detect(agents, marks);
@@ -630,7 +717,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const cooldowns = readJson<Record<string, number>>(config.cooldownsPath, {});
 	const built = deps.models ? { ...deps.models, falsifier: deps.models.escalator, degraded: undefined } : buildLadderModels(config);
 	const { primary, escalator, falsifier, degraded } = built;
-	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry };
+	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd };
 	const pending = pendingAsks(readAskLog(config.asksPath));
 
 	if (degraded) await notifier.send(degraded, "alert").catch(() => undefined);
@@ -940,9 +1027,11 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// mtime lies about when the fleet last moved.
 	if (pendingDirty) writeJson(pendingPath(config.eventsPath), pendingJson(pendingOutcomes));
 	// This row is the tick's own denominator: the same numbers as before, plus how
-	// long the pass took and which models it actually consulted, so "is a tick
-	// getting slower or more expensive" is a question about this row and not about
-	// the sum of everything else.
+	// long the pass took, which models it actually consulted, and where the day's
+	// spend stands — with the cap that produced it — so "is a tick getting slower or
+	// more expensive" is a question about this row and not about the sum of everything
+	// else.
+	report.dailyCostUsd = spend.spentUsd + report.costUsd;
 	appendMetric(
 		config,
 		makeTick({
@@ -959,6 +1048,8 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			durationMs: elapsed(tickStartedAt),
 			models: [...models].sort(),
 			dry: config.dry,
+			dailyCostUsd: Number(report.dailyCostUsd.toFixed(6)),
+			...(config.dailyCostCapUsd > 0 ? { dailyCostCapUsd: config.dailyCostCapUsd } : {}),
 		}),
 	);
 	return report;
@@ -973,7 +1064,7 @@ async function main(): Promise<void> {
 		try {
 			const report = await tick({ port, notifier, config });
 			console.error(
-				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dry ? " (dry)" : ""}`,
+				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dailyCostCapUsd > 0 ? ` · cap $${report.dailyCostCapUsd.toFixed(2)}/day · spent $${report.dailyCostUsd.toFixed(6)}` : ""}${report.capped ? " · capped" : ""}${report.dry ? " (dry)" : ""}`,
 			);
 		} catch (e) {
 			const message = `fleet tick failed: ${(e as Error).message}`;

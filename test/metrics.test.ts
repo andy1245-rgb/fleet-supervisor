@@ -712,17 +712,20 @@ function fixedModel(name: string, reply: Partial<Decision>): DecisionModel {
 }
 
 function tickConfig(dir: string, overrides: Partial<Config> = {}): Config {
-	return {
+	const base: Config = {
 		intervalMs: 60_000,
 		once: true,
 		dry: false,
 		primary: "fake:primary",
 		escalator: "fake:escalator",
 		threshold: 0.7,
+		effort: "low",
+		decisionTimeoutMs: 90_000,
 		readLines: 40,
 		concurrency: 2,
 		maxPromptsPerTick: 3,
 		nudgeCooldownMin: 10,
+		dailyCostCapUsd: 0,
 		inspector: "off",
 		maxInspectionsPerTick: 0,
 		ask: "fork",
@@ -733,8 +736,8 @@ function tickConfig(dir: string, overrides: Partial<Config> = {}): Config {
 		asksPath: join(dir, "asks.jsonl"),
 		policyPath: join(dir, "policy.json"),
 		watchdog: false,
-		...overrides,
 	};
+	return { ...base, ...overrides };
 }
 
 test("one tick writes rows the report can read, with the gate's verdict on the action", async () => {

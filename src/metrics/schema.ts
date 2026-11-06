@@ -184,6 +184,17 @@ export interface TickEvent extends Base {
 	dry: boolean;
 	/** Legacy alias of `held`: the existing `tick` line calls it `asks`. */
 	asks?: number;
+	/** True when the daily spend cap skipped every model call this tick. `models`
+	 *  is empty on these rows and no `decision` row is written for them: a row for a
+	 *  call that was not made is the same lie as a cost that was never spent. */
+	capped?: boolean;
+	/** Why the tick was capped, naming the cap and the spend it measured. */
+	capReason?: string;
+	/** Spend already recorded for the local day when this row was written, this
+	 *  tick's own cost included. */
+	dailyCostUsd?: number;
+	/** The cap in force, in dollars. Absent when the cap is disabled. */
+	dailyCostCapUsd?: number;
 }
 
 /** One cross-agent trigger, as the scan found it. Log-only triggers (churn with
@@ -364,6 +375,10 @@ const TICK_FIELDS: readonly FieldSpec[] = [
 	{ key: "models", type: "strings", required: true },
 	{ key: "dry", type: "boolean", required: true },
 	{ key: "asks", type: "number", required: false },
+	{ key: "capped", type: "boolean", required: false },
+	{ key: "capReason", type: "string", required: false },
+	{ key: "dailyCostUsd", type: "number", required: false },
+	{ key: "dailyCostCapUsd", type: "number", required: false },
 ];
 
 const TRIGGER_FIELDS: readonly FieldSpec[] = [
@@ -588,6 +603,10 @@ export interface TickRecord {
 	durationMs: number;
 	models: string[];
 	dry: boolean;
+	capped?: boolean;
+	capReason?: string;
+	dailyCostUsd?: number;
+	dailyCostCapUsd?: number;
 	ts?: string;
 }
 

@@ -11,7 +11,6 @@ import { EFFORTS, accountUsage, buildRequest, commandcodeModel, decisionFrom, pe
 import { responsesReader, usageOf, type ResponsesOutcome } from "../src/decision/adapters/responses.ts";
 import { SYSTEM } from "../src/decision/prompt.ts";
 import type { DecisionInput } from "../src/decision/types.ts";
-import { loadConfig } from "../src/manager/config.ts";
 import { buildModel } from "../src/manager/tick.ts";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
@@ -389,10 +388,4 @@ test("buildModel sends a commandcode/ name to the responses adapter", () => {
 		process.env.HOME = previous;
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
-
-test("the default primary is still needle3", () => {
-	assert.equal(loadConfig({}).primary, "needle3");
-	assert.equal(loadConfig({}).escalator, "z-ai/glm-5.3-flash");
-	assert.equal(loadConfig({}).primary, loadConfig({ AGENTFLEET_PRIMARY: "" }).primary);
 });
