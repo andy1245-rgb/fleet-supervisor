@@ -2,8 +2,12 @@
 	"name": "fleet-supervisor",
 	"version": "0.0.1",
 	"private": true,
+	"license": "MIT",
 	"type": "module",
 	"description": "Supervisor for a fleet of live agent panes: change detection, decision models, escalation, watchdog, benchmark",
+	"engines": {
+		"node": ">=24"
+	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "node --test test/*.test.ts",
