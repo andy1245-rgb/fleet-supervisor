@@ -1,0 +1,43 @@
+{
+ "capturedAt": "2026-11-06T16:31:09.581Z",
+ "derivedFrom": "commandcode-decision.sse.json",
+ "derivedBy": "src/decision/adapters/responses.ts + src/decision/adapters/commandcode.ts",
+ "note": "Parsed result of the live capture, produced by running the adapter over the recorded frames.",
+ "httpStatus": 200,
+ "servedModel": "deepseek/deepseek-v4.1-flash",
+ "responseId": "resp_27805bbe5p8o9HacMkzvKJW6MRulwx6CmVDCrFmmR6F8xNunP5u23cfSmfi3FdfdSJlp3l0Dc_Gh2rqv1cbjyo19kaGG_EnK7v2DrBpILx6zTs8bLWADb2xMu-jWzmwsomfvh-buNzNSL_tjDiFnSyVaE5Z1gYBDgZA5X6TAxyWA_912_N0m9cWaEQcG86BtzFq3DsTkN6JnKDDrhh4lnyY1BKNdyS5qyRg",
+ "stop": "completed",
+ "status": "completed",
+ "sawDoneSentinel": false,
+ "events": 43,
+ "unparseable": 0,
+ "decision": {
+  "op": "nudge",
+  "argument": "Fix the TS2322 error in src/decision/adapters/responses.ts line 41 so the value is a string (e.g. narrow or default the optional string), then run npx tsc --noEmit and the commandcode wire test to confirm acceptance.",
+  "confidence": 0.85,
+  "model": "deepseek/deepseek-v4.1-flash",
+  "costUsd": 0.00011085,
+  "latencyMs": 2507,
+  "raw": "{\"op\": \"nudge\", \"argument\": \"Fix the TS2322 error in src/decision/adapters/responses.ts line 41 so the value is a string (e.g. narrow or default the optional string), then run npx tsc --noEmit and the commandcode wire test to confirm acceptance.\", \"confidence\": 0.85}",
+  "refused": false
+ },
+ "latencyNote": "decision.latencyMs is the capture harness's request-to-stream-end figure (measured around the whole POST in one res.text()), so it is an UPPER BOUND on the adapter's definition and not an instance of it. The adapter reports first byte to last event (SPEC §4.8) and labels the definition on the decision; this capture keeps no per-frame timestamps, so no first-byte-to-last-event figure can be derived from it.",
+ "reasoningSummary": "The agent is idle with a TypeScript error. It stopped before finishing. Idle ticks 3. We should nudge with the specific fix.",
+ "usage": {
+  "inputTokens": 315,
+  "outputTokens": 106,
+  "totalTokens": 421,
+  "cachedTokens": 0,
+  "cacheWriteTokens": null,
+  "reasoningTokens": 30
+ },
+ "accounting": {
+  "promptTokens": 315,
+  "completionTokens": 106,
+  "reasoningTokens": 30,
+  "cacheReadTokens": 0,
+  "cacheWriteTokens": 0,
+  "costUsd": 0.00011085
+ },
+ "peakMultiplier": 1
+}
