@@ -18,6 +18,7 @@
 import { envelope, lagSecondsOf, tile } from "../envelope.ts";
 import { forkSummary } from "../asks.ts";
 import { noteOf, paneName } from "../name.ts";
+import type { NameNote } from "../name.ts";
 import { scopeOf } from "../source.ts";
 import { answerVerb } from "../where.ts";
 import type { Ctx, Doc, Row } from "../types.ts";
@@ -76,7 +77,7 @@ interface AskCard {
 	forkCounts: { hard: number; soft: number; total: number };
 }
 
-function card(record: AskRecord, args: { now: number; pane: Row | undefined; scope: ReturnType<typeof scopeOf>; actionsEnabled: boolean; root: string }): AskCard {
+function card(record: AskRecord, args: { now: number; pane: Row | undefined; note: NameNote | null; scope: ReturnType<typeof scopeOf>; actionsEnabled: boolean; root: string }): AskCard {
 	const panePresent = args.scope.comparable ? args.pane !== undefined : null;
 	return {
 		id: record.id,
@@ -97,7 +98,10 @@ function card(record: AskRecord, args: { now: number; pane: Row | undefined; sco
 		panePresent,
 		paneStatus: args.pane?.agent_status ?? null,
 		paneTitle: args.pane?.terminal_title_stripped ?? args.pane?.terminal_title ?? null,
-		name: paneName({ label: args.pane?.label ?? null, paneId: record.paneId }),
+		/** The name chain, and the only place a card gets one: `label` is herdr's pane
+		 *  label, never `paneTitle`. A terminal title is the shell's prompt, and naming a
+		 *  row after it is what made the page and the CLI disagree about the same pane. */
+		name: paneName({ label: args.pane?.label ?? null, note: args.note, paneId: record.paneId }),
 		scope: {
 			records: args.scope.records,
 			panes: args.scope.panes.kind,
@@ -122,11 +126,16 @@ export function buildAsks(ctx: Ctx): Doc {
 	const claims = source.claims.claims;
 	const actionsEnabled = opts.enableActions;
 
-	const pending = source.asks.pending.map((record) => {
-		const entry = claims.get(record.paneId);
-		const named = card(record, { now, pane: panesById.get(record.paneId), scope, actionsEnabled, root: opts.agentFleetRoot });
-		return { ...named, name: paneName({ label: named.paneTitle, note: noteOf(entry?.claim), paneId: record.paneId }) };
-	});
+	const pending = source.asks.pending.map((record) =>
+		card(record, {
+			now,
+			pane: panesById.get(record.paneId),
+			note: noteOf(claims.get(record.paneId)?.claim),
+			scope,
+			actionsEnabled,
+			root: opts.agentFleetRoot,
+		}),
+	);
 
 	const answered = source.asks.answered.map((record) => ({
 		id: record.id,

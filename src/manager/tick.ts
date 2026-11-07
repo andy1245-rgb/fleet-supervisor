@@ -1026,7 +1026,9 @@ export async function tick(deps: Deps): Promise<TickReport> {
 					const claim: Claim = {
 						paneId: entry.move.paneId,
 						cwd,
-						intent: base?.intent ?? entry.move.agent.title,
+						/** Never `agent.title`: that is the shell's prompt, and `claim.intent` is rung 2
+						 *  of the name chain. Empty is what the other two done-claim writers use. */
+						intent: base?.intent ?? "",
 						phase: "idle",
 						state: "done",
 						last: decision.argument,
