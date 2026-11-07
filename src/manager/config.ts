@@ -38,8 +38,9 @@
 // `globalSpendCapUsd` is the second one, wider: it bounds the *whole account's* day
 // (every agent on this machine plus this supervisor, see ../metrics/global.ts) rather
 // than only what the supervisor spent. Two caps, one rule — whichever is lower and
-// enabled wins — stated where the check runs, in ./tick.ts. It is **off until the
-// operator sets it**; the fleet's own cap is separate and stays at 0.50.
+// enabled wins — stated where the check runs, in ./tick.ts. Both are **off until the
+// operator sets them**: the fleet's own cap ships `null` too, so a fresh install spends
+// and records rather than refusing.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -66,15 +67,21 @@ export function normalizeEffort(value: unknown): ReasoningEffort {
 	return typeof value === "string" && (EFFORTS as readonly string[]).includes(value) ? (value as ReasoningEffort) : DEFAULT_EFFORT;
 }
 
-/** A hard ceiling on one local day's model spend, in dollars. `0` disables it.
+/** A hard ceiling on one local day's model spend, in dollars, or `null` for off.
  *
- *  `0.50`, and the arithmetic is the reason: the plan measures a decision at
- *  $0.000138 and the fleet can raise 6,261 of them in a day, which is ~$0.86 — so
- *  0.50 stops a runaway at roughly half a normal heavy day without blocking one,
- *  and leaves the margin for the escalations and inspections that are already
- *  capped per tick. It is a default, not a policy: the operator raises it with one
- *  environment variable when he wants the fleet to spend more (see README). */
-export const DEFAULT_DAILY_COST_CAP_USD = 0.5;
+ *  `null`, matching the global cap, and for the operator's own reason: the fleet
+ *  runs on a flat commandcode plan, so a dollar ceiling over calls that are not
+ *  billed per token is a refusal with no saving behind it. Off is the shipped
+ *  state; the mechanism is intact, tested, and one variable away — set
+ *  `AGENTFLEET_DAILY_COST_CAP_USD=0.50` and the tick stops calling models at that
+ *  number again. `0` is still accepted as the other way to say off, because it was
+ *  the documented switch and an operator's `0` must not become a cap of nothing.
+ *
+ *  Stop *recording* spend when this is off? No. Accounting and refusal are two
+ *  different promises: the tick still prices every call into `costUsd` and still
+ *  folds the day's total, so the figure on the row and in the Cost screen is
+ *  unchanged. Only the refusal is switched off. */
+export const DEFAULT_DAILY_COST_CAP_USD: number | null = null;
 
 /** The account's day, in dollars, or `null` for "not enforced".
  *
@@ -86,27 +93,31 @@ export const DEFAULT_DAILY_COST_CAP_USD = 0.5;
  *  account's UTC day reaches that number. */
 export const DEFAULT_GLOBAL_SPEND_CAP_USD: number | null = null;
 
-/** Dollars, or a rejection.
+/** Dollars, or `null` for off, or a rejection.
  *
  *  Every other limit in this file falls back to its default on nonsense, because a
  *  typo in `AGENTFLEET_CONCURRENCY` should not cost a tick. This one is the
  *  exception: a cap the operator believes he set and did not is the exact failure the
  *  cap exists to prevent, so `fifty` is an error at startup rather than a silent
- *  return to 0.50. Deliberately not `Number()`'s grammar — `0x10`, `1e3` and
- *  `0.5abc` are not dollar amounts an operator typed on purpose. */
-export function parseDailyCostCap(value: string | undefined): number {
+ *  return to uncapped. Deliberately not `Number()`'s grammar — `0x10`, `1e3` and
+ *  `0.5abc` are not dollar amounts an operator typed on purpose.
+ *
+ *  Unset, `""` and `"0"` all mean off. `null` rather than `0` as the off value, so
+ *  "no cap" is one fact with one spelling rather than two that a reader has to
+ *  reconcile — and so a `0` cannot be reported as "a cap of zero dollars". */
+export function parseDailyCostCap(value: string | undefined): number | null {
 	if (value === undefined || value.trim() === "") return DEFAULT_DAILY_COST_CAP_USD;
 	const text = value.trim();
 	if (!/^(\d+(\.\d*)?|\.\d+)$/.test(text)) {
 		throw new Error(
-			`AGENTFLEET_DAILY_COST_CAP_USD must be a non-negative dollar amount such as "0.50"; 0 disables the cap. Got "${value}"`,
+			`AGENTFLEET_DAILY_COST_CAP_USD must be a non-negative dollar amount such as "0.50"; leave it unset (or 0) to disable the cap. Got "${value}"`,
 		);
 	}
 	const n = Number(text);
 	if (!Number.isFinite(n)) {
 		throw new Error(`AGENTFLEET_DAILY_COST_CAP_USD is not a finite number: got "${value}"`);
 	}
-	return n;
+	return n === 0 ? null : n;
 }
 
 /** Dollars, or `null` for off, or a rejection.
@@ -170,10 +181,10 @@ export interface Config {
 	maxPromptsPerTick: number;
 	/** Minutes before the same pane may be nudged again. */
 	nudgeCooldownMin: number;
-	/** Hard ceiling on one local day's model spend, in dollars. `0` disables it.
-	 *  The only limit here that is not per-tick: a tick that finds the day at or over
-	 *  this makes no model call at all (see `tick.ts`). */
-	dailyCostCapUsd: number;
+	/** Hard ceiling on one local day's model spend, in dollars, or `null` for off (the
+	 *  shipped state). The only limit here that is not per-tick: a tick that finds the
+	 *  day at or over this makes no model call at all (see `tick.ts`). */
+	dailyCostCapUsd: number | null;
 	/** Hard ceiling on one **UTC** day's spend across every agent on this machine plus
 	 *  the supervisor, in dollars. `null` or `0` disables it, and it is `null` by
 	 *  default. When both caps are enabled the lower one is the one that fires. */

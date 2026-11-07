@@ -59,6 +59,9 @@ function decisionRow(overrides: Partial<DecisionEvent> = {}): DecisionEvent {
 		costUsd: 0,
 		policy: "fork",
 		held: false,
+		// Every decision this build writes names its path. `adapter` here because this
+		// fixture is a hosted-adapter row.
+		mode: "adapter",
 		ts: at(60),
 		...overrides,
 	});

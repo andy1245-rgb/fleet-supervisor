@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_DAILY_COST_CAP_USD, loadConfig, parseDailyCostCap, type Config } from "../src/manager/config.ts";
 import { dailySpend, localDay } from "../src/metrics/daily.ts";
-import { tick } from "../src/manager/tick.ts";
+import { fleetCapLine, tick } from "../src/manager/tick.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../src/decision/types.ts";
 import type { HerdrAgent, HerdrPort, PromptResult } from "../src/herdr/types.ts";
 import type { Notifier } from "../src/notify/telegram.ts";
@@ -86,7 +86,7 @@ function recordingNotifier(): Recording {
 	};
 }
 
-function testConfig(dir: string, dailyCostCapUsd: number): Config {
+function testConfig(dir: string, dailyCostCapUsd: number | null): Config {
 	return {
 		intervalMs: 60_000,
 		once: true,
@@ -159,7 +159,7 @@ function lastTickRow(dir: string): SeqEvent {
 
 async function runTick(
 	dir: string,
-	options: { cap: number; now: number; primary: DecisionModel; escalator: DecisionModel; notifier: Notifier; agents?: readonly HerdrAgent[] },
+	options: { cap: number | null; now: number; primary: DecisionModel; escalator: DecisionModel; notifier: Notifier; agents?: readonly HerdrAgent[] },
 ): Promise<{ capped: boolean; decisions: number; costUsd: number }> {
 	const saved = { registry: process.env.AGENTFLEET_REGISTRY, state: process.env.AGENTFLEET_STATE };
 	process.env.AGENTFLEET_REGISTRY = join(dir, "registry");
@@ -192,19 +192,57 @@ async function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
 
 // ------------------------------------------------------------------ the config
 
-test("the cap defaults to $0.50 and is settable, with 0 disabling it", () => {
-	assert.equal(DEFAULT_DAILY_COST_CAP_USD, 0.5);
-	assert.equal(loadConfig({}).dailyCostCapUsd, 0.5);
+test("the cap ships off, and either unset or 0 means off", () => {
+	assert.equal(DEFAULT_DAILY_COST_CAP_USD, null, "the mechanism exists and is switched off");
+	assert.equal(loadConfig({}).dailyCostCapUsd, null);
 	// An empty string is "unset", not a cap of nothing.
-	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "" }).dailyCostCapUsd, 0.5);
+	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "" }).dailyCostCapUsd, null);
 	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "2.25" }).dailyCostCapUsd, 2.25);
-	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "0" }).dailyCostCapUsd, 0, "0 is the documented off switch");
-	assert.equal(parseDailyCostCap(" .5 ").toString(), "0.5");
+	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "0" }).dailyCostCapUsd, null, "0 is the documented off switch, and reads as off, not as a cap of zero dollars");
+	assert.equal(parseDailyCostCap(" .5 "), 0.5);
+});
+
+test("an unset cap is absent from the tick row, and the spend is still recorded", async () => {
+	// Two promises are being kept apart here. **Accounting**: the tick prices every
+	// call it made and folds the day's total, uncapped or not, so the figure on the
+	// row and on the Cost screen does not move when the cap does. **Refusal**: with no
+	// cap there is none, however much was already spent today.
+	//
+	// The `0` trap: a `dailyCostCapUsd: 0` on the row would read as a cap of zero
+	// dollars rather than as no cap, so an uncapped tick must write no field at all —
+	// the same rule the global cap already follows.
+	await withDir(async (dir) => {
+		// Spend far past where a $0.50 cap would have stopped, three panes moving.
+		seedTick(dir, NOON, 6.2);
+		const primary: Counter = { calls: 0 };
+		const escalator: Counter = { calls: 0 };
+		const recording = recordingNotifier();
+
+		const report = await runTick(dir, {
+			cap: null,
+			now: NOON,
+			primary: countingModel("primary", primary),
+			escalator: countingModel("escalator", escalator),
+			notifier: recording.notifier,
+			agents: [agent("p1", { completionSeq: 2 }), agent("p2", { completionSeq: 2 }), agent("p3", { completionSeq: 2 })],
+		});
+
+		assert.equal(primary.calls, 3, "$6.20 spent and the fleet still decides: there is no ceiling to reach");
+		assert.equal(report.capped, false, "an uncapped tick is never capped");
+		assert.equal(report.decisions, 3);
+		assert.equal(report.costUsd, 0.000414, "the tick still prices what it spent");
+		assert.equal(recording.texts.length, 0, "and says nothing about a cap it does not have");
+
+		const row = lastTickRow(dir);
+		assert.equal("dailyCostCapUsd" in row, false, "an uncapped tick writes no cap field at all");
+		assert.equal(row.capped, undefined, "and does not claim to be capped");
+		assert.equal(row.dailyCostUsd, 6.200414, "the day's spend is still measured and recorded: accounting is not the refusal");
+	});
 });
 
 test("an unparseable cap is an error at startup, not a silent default", () => {
 	// The whole point of the cap is that the operator's belief about his limit matches
-	// the supervisor's. A silent fallback to 0.50 breaks that quietly.
+	// the supervisor's. A silent fallback to uncapped breaks that quietly.
 	for (const value of ["fifty", "-1", "0x10", "1e3", "0.5abc", "half a dollar", "NaN", "Infinity"]) {
 		assert.throws(
 			() => loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: value }),
@@ -213,6 +251,20 @@ test("an unparseable cap is an error at startup, not a silent default", () => {
 		);
 	}
 	assert.throws(() => parseDailyCostCap("fifty"), /non-negative dollar amount such as "0\.50"/);
+});
+
+// ------------------------------------------------------------------- the line
+
+test("the summary line says which cap is in force, and says so out loud when there is none", () => {
+	// An omitted clause and a satisfied cap look identical on a line an operator reads
+	// to answer "would the fleet have stopped?". Both forms therefore say something,
+	// and both print the spend, because spend is measured either way.
+	const uncapped = fleetCapLine({ dailyCostCapUsd: null, dailyCostUsd: 0.009219 });
+	assert.equal(uncapped, " · no daily cap · spent $0.009219");
+	assert.equal(/cap \$/.test(uncapped.replace("no daily cap", "")), false, "no dollar figure is claimed as a cap");
+
+	const armed = fleetCapLine({ dailyCostCapUsd: 0.5, dailyCostUsd: 0.009219 });
+	assert.equal(armed, " · cap $0.50/day · spent $0.009219");
 });
 
 // ------------------------------------------------------------------- the check

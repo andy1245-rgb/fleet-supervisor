@@ -20,6 +20,8 @@
 //   * the numeric fields are the ones a stage can be *judged* on. A field that
 //     nothing can act on is not here; the human-readable log stays where it is.
 
+import { EFFORTS } from "../decision/adapters/commandcode.ts";
+import { type DecisionMode } from "../decision/mode.ts";
 import { isOp, type Op } from "../decision/types.ts";
 import type { Phase } from "../fleet/registry.ts";
 import type { AgentStatus } from "../herdr/types.ts";
@@ -38,6 +40,13 @@ export const SCHEMA_VERSION = 2;
 
 /** Which path produced a finding, and therefore what its cost and latency mean. */
 export type InspectionMode = "cheap" | "deep";
+
+/** The reasoning level a decision was made at. A `pi` decision is always `none`
+ *  (the path passes `--thinking off` and proves it with `usage.reasoning === 0`);
+ *  a hosted adapter decision is whatever `effort` it was configured with. `null` on
+ *  the row means the path has no reasoning parameter at all — the local engine —
+ *  which is not the same fact as "reasoned for zero tokens". */
+export type DecisionReasoning = (typeof EFFORTS)[number];
 
 /** What happened to a would-be action. `held` is the gate parking it in
  *  asks.jsonl; `dry` is a rehearsal that touched nothing. */
@@ -93,6 +102,18 @@ const DISPOSITIONS: Readonly<Record<ActionDisposition, true>> = {
 };
 
 const MODES: Readonly<Record<InspectionMode, true>> = { cheap: true, deep: true };
+
+const DECISION_MODES_SET: Readonly<Record<DecisionMode, true>> = { adapter: true, pi: true };
+
+const REASONING_LEVELS: Readonly<Record<DecisionReasoning, true>> = {
+	none: true,
+	minimal: true,
+	low: true,
+	medium: true,
+	high: true,
+	xhigh: true,
+	max: true,
+};
 
 const OUTCOME_KINDS: Readonly<Record<OutcomeKind, true>> = {
 	progressed: true,
@@ -151,7 +172,22 @@ export interface DecisionEvent extends Base {
 	policy: AskPolicy;
 	/** True when the gate parked this decision's action instead of performing it. */
 	held: boolean;
-	/** Absent in every row today: no adapter reports token usage. */
+	/** Which path produced this decision: the `pi` subprocess or the hosted adapter
+	 *  plus its escalator. Required of every row this build writes (see
+	 *  `DecisionRecord`); optional in the parser so a log that predates the toggle
+	 *  stays readable — every such row is `adapter`, because it was the only path. */
+	mode?: DecisionMode;
+	/** The reasoning level the deciding model ran at, or `null` for a path with no
+	 *  reasoning parameter. `none` is a measurement, not an absence. */
+	reasoning?: DecisionReasoning | null;
+	/** True when no second call was possible or attempted for a reason other than
+	 *  the rules declining to ask — today only `pi mode`, where there is no escalator
+	 *  by construction. Without it a log with no escalations reads as a ladder that
+	 *  agreed, which is the reading this field exists to prevent. */
+	escalationSkipped?: string;
+	/** Tokens as the deciding model's wire reported them. A `pi` row carries both;
+	 *  a hosted-adapter row carries both when its usage block did; a row from a path
+	 *  that reports neither omits them rather than writing a zero nobody measured. */
 	promptTokens?: number;
 	completionTokens?: number;
 	/** Ground truth from a bench join, when one supplies it. Absent otherwise,
@@ -348,7 +384,22 @@ export type SchemaEvent = EventByKind[EventKind];
 
 // ------------------------------------------------------------- the validators
 
-type FieldType = "string" | "number" | "boolean" | "strings" | "op" | "policy" | "triggerKind" | "mode" | "disposition" | "phase" | "claimState" | "outcomeKind" | "agentStatus";
+type FieldType =
+	| "string"
+	| "number"
+	| "boolean"
+	| "strings"
+	| "op"
+	| "policy"
+	| "triggerKind"
+	| "mode"
+	| "decisionMode"
+	| "reasoning"
+	| "disposition"
+	| "phase"
+	| "claimState"
+	| "outcomeKind"
+	| "agentStatus";
 
 interface FieldSpec {
 	key: string;
@@ -370,6 +421,9 @@ const DECISION_FIELDS: readonly FieldSpec[] = [
 	{ key: "costUsd", type: "number", required: true },
 	{ key: "policy", type: "policy", required: true },
 	{ key: "held", type: "boolean", required: true },
+	{ key: "mode", type: "decisionMode", required: false },
+	{ key: "reasoning", type: "reasoning", required: false },
+	{ key: "escalationSkipped", type: "string", required: false },
 	{ key: "promptTokens", type: "number", required: false },
 	{ key: "completionTokens", type: "number", required: false },
 	{ key: "labelOp", type: "op", required: false },
@@ -483,6 +537,12 @@ function fieldOk(value: unknown, type: FieldType): boolean {
 			return known(TRIGGER_KINDS, value);
 		case "mode":
 			return known(MODES, value);
+		case "decisionMode":
+			return known(DECISION_MODES_SET, value);
+		case "reasoning":
+			// `null` is a value here: "this path has no reasoning parameter" is a fact
+			// about the path, and writing `none` for it would claim a measurement.
+			return value === null || known(REASONING_LEVELS, value);
 		case "disposition":
 			return known(DISPOSITIONS, value);
 		case "phase":
@@ -597,6 +657,11 @@ export interface DecisionRecord {
 	costUsd: number;
 	policy: AskPolicy;
 	held: boolean;
+	/** Required here and not in `DecisionEvent`, so a caller cannot forget it while a
+	 *  log written before the toggle still parses (see the field's own note). */
+	mode: DecisionMode;
+	reasoning?: DecisionReasoning | null;
+	escalationSkipped?: string;
 	promptTokens?: number;
 	completionTokens?: number;
 	labelOp?: Op;

@@ -1,0 +1,13 @@
+{
+	"paneId": "w1:p3",
+	"cwd": "/home/andrew/agentFleet",
+	"status": "idle",
+	"title": "fleet-supervisor: retry the metrics backfill",
+	"intent": "make the metrics backfill idempotent",
+	"phase": "implement",
+	"acceptance": "backfill run twice leaves one row per day",
+	"claimState": "working",
+	"last": "wrote the dedupe key",
+	"idleTicks": 11,
+	"tail": "$ node src/metrics/backfill.ts\nreading events.jsonl\nwrote 41 rows\n$ npm test\n\n> fleet-supervisor@0.0.1 test\n> node --test test/*.test.ts\n\nnot ok 3 - backfill dedupe\n  error: expected 1 row, got 2\n$ "
+}

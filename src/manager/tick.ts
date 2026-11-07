@@ -21,9 +21,11 @@ import { detect, loadMarks, saveMarks, type Marks } from "../fleet/detect.ts";
 import { groupOf } from "../fleet/groups.ts";
 import { readClaims, writeClaim, type Claim } from "../fleet/registry.ts";
 import { commandcodeModel, type ReasoningEffort } from "../decision/adapters/commandcode.ts";
-import { decideWithEscalation } from "../decision/escalation.ts";
+import { decideWithEscalation, type EscalationResult } from "../decision/escalation.ts";
+import { decisionModePath, readDecisionMode, type DecisionMode } from "../decision/mode.ts";
 import { needleModel } from "../decision/needle.ts";
 import { openRouterModel } from "../decision/openrouter.ts";
+import { piModel, PI_TIMEOUT_MS } from "../decision/pi.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../decision/types.ts";
 import { defaultNotifier, type Notifier } from "../notify/telegram.ts";
 import { scanTriggers, type ClaimHistory, type Trigger } from "./triggers.ts";
@@ -34,7 +36,7 @@ import { askPolicyFor, loadConfig, type Config } from "./config.ts";
 import { dailySpend, utcDay } from "../metrics/daily.ts";
 import { globalSpend, type GlobalSpend } from "../metrics/global.ts";
 import { inspect, type Finding } from "./inspector.ts";
-import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
+import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type DecisionReasoning, type SchemaEvent } from "../metrics/schema.ts";
 import { DEFAULT_WINDOW_TICKS, decidedAt, isSilent, judge, observedTicks, parsePending, pendingJson, pendingPath, recordPending, type Observation, type PendingDecision } from "../metrics/outcome.ts";
 
 export interface TickReport {
@@ -61,14 +63,21 @@ export interface TickReport {
 	/** Which cap stopped it, when one did. */
 	capScope?: "fleet" | "global";
 	/** Today's spend, this tick's own cost included, and the cap in force in dollars
-	 *  (`0` when the cap is disabled). */
+	 *  (`null` when the cap is off). Spend is recorded either way: an uncapped tick
+	 *  still prices every call it made. */
 	dailyCostUsd: number;
-	dailyCostCapUsd: number;
+	dailyCostCapUsd: number | null;
 	/** The global cap in force (`null` when disabled) and the UTC day's total across
 	 *  every agent plus this supervisor (`null` when the source could not be read, or
 	 *  when the cap is disabled and nothing was measured). */
 	globalCostCapUsd: number | null;
 	globalSpendUsd: number | null;
+	/** The decision path this tick actually used, read from the persisted toggle once
+	 *  at the top of the tick. */
+	decisionMode: DecisionMode;
+	/** Why the toggle did not decide, when it did not. Absent on the ordinary path —
+	 *  a file that was never written is a fresh install, not a fault. */
+	decisionModeNote?: string;
 }
 
 export interface Deps {
@@ -293,6 +302,33 @@ async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>
 export function describeDecision(decision: Decision): string {
 	const tag = decision.refused ? "refused" : decision.op;
 	return `${tag}(${decision.argument.slice(0, 120)}) via ${decision.model} conf ${decision.confidence.toFixed(2)}`;
+}
+
+/** The reasoning level the decision was made at, for the row.
+ *
+ *  The `pi` path is `none` by construction: PI_THINKING is `off` and the module
+ *  proves it from `usage.reasoning === 0`. On the adapter path only the hosted
+ *  `responses` wire has a reasoning parameter, and `config.effort` is what was sent
+ *  to it; a chat-completions model, or the local engine, has no such field and the
+ *  row says `null` rather than claiming a level nobody set. */
+function reasoningOf(mode: DecisionMode, config: Config, model: string): DecisionReasoning | null {
+	if (mode === "pi") return "none";
+	return model.startsWith("commandcode:") ? config.effort : null;
+}
+
+/** Token counts, when the deciding path reported any.
+ *
+ *  Both real paths attach an `accounting` block (the adapter's `AccountedDecision`,
+ *  the `pi` path's `PiDecision`); a path that reports neither — the local engine —
+ *  leaves both fields off the row, because a zero would be a measurement nobody
+ *  made. Read through a guard rather than a cast so a shape change is a type error. */
+function tokensOf(decision: Decision): { promptTokens?: number; completionTokens?: number } {
+	const accounting = (decision as { accounting?: { promptTokens?: unknown; completionTokens?: unknown } }).accounting;
+	if (accounting === undefined) return {};
+	const out: { promptTokens?: number; completionTokens?: number } = {};
+	if (typeof accounting.promptTokens === "number" && Number.isFinite(accounting.promptTokens)) out.promptTokens = accounting.promptTokens;
+	if (typeof accounting.completionTokens === "number" && Number.isFinite(accounting.completionTokens)) out.completionTokens = accounting.completionTokens;
+	return out;
 }
 
 export interface GateArgs {
@@ -644,19 +680,21 @@ interface CapFire {
  *
  *  A cap is only ever a promise that the fleet will not spend past a number, so with
  *  two promises the smaller one holds: whichever enabled cap is lower and has been
- *  reached is the one that fires. A cap that is disabled (`0`, or `null` for the wide
- *  one) contributes no candidate, so two disabled caps block nothing. A reach it is
- *  at the boundary, `>=`, because the supervisor stops *at* the cap and a GUI that
- *  warns on the same number must not disagree with it. A tie goes to the fleet cap,
- *  the narrower of the two, so one configuration cannot record two different scopes.
+ *  reached is the one that fires. A cap that is disabled (`null` for either, or `0`
+ *  for the fleet's) contributes no candidate, so two disabled caps block nothing. A
+ *  reach it is at the boundary, `>=`, because the supervisor stops *at* the cap and a
+ *  GUI that warns on the same number must not disagree with it. A tie goes to the
+ *  fleet cap, the narrower of the two, so one configuration cannot record two
+ *  different scopes.
  *
  *  A global cap whose spend is `null` — the agent log could not be read — is not a
  *  candidate: an unknown total is not evidence that a limit was reached, and the
  *  fail-open path above has already said so out loud. */
-function capFired(args: { fleetCapUsd: number; fleetSpendUsd: number; globalCapUsd: number | null; globalSpendUsd: number | null }): CapFire | undefined {
+function capFired(args: { fleetCapUsd: number | null; fleetSpendUsd: number; globalCapUsd: number | null; globalSpendUsd: number | null }): CapFire | undefined {
 	const candidates: CapFire[] = [];
-	if (args.fleetCapUsd > 0 && args.fleetSpendUsd >= args.fleetCapUsd) {
-		candidates.push({ scope: "fleet", limitUsd: args.fleetCapUsd, spendUsd: args.fleetSpendUsd });
+	const fleetCapUsd = args.fleetCapUsd;
+	if (fleetCapUsd !== null && fleetCapUsd > 0 && args.fleetSpendUsd >= fleetCapUsd) {
+		candidates.push({ scope: "fleet", limitUsd: fleetCapUsd, spendUsd: args.fleetSpendUsd });
 	}
 	const globalCapUsd = args.globalCapUsd;
 	const globalSpendUsd = args.globalSpendUsd;
@@ -681,7 +719,7 @@ function capFields(
 	ownCostUsd: number,
 ): { dailyCostCapUsd?: number; globalCostCapUsd?: number; globalSpendUsd?: number; globalSpendSource?: "usage.jsonl" | "unavailable" } {
 	const fields: { dailyCostCapUsd?: number; globalCostCapUsd?: number; globalSpendUsd?: number; globalSpendSource?: "usage.jsonl" | "unavailable" } = {};
-	if (config.dailyCostCapUsd > 0) fields.dailyCostCapUsd = config.dailyCostCapUsd;
+	if (config.dailyCostCapUsd !== null && config.dailyCostCapUsd > 0) fields.dailyCostCapUsd = config.dailyCostCapUsd;
 	if (config.globalSpendCapUsd !== null && config.globalSpendCapUsd > 0) fields.globalCostCapUsd = config.globalSpendCapUsd;
 	if (wide !== undefined) {
 		if (wide.totalUsd === null) fields.globalSpendSource = "unavailable";
@@ -699,6 +737,41 @@ function capLine(report: TickReport): string {
 	if (report.globalCostCapUsd === null) return "";
 	const account = report.globalSpendUsd === null ? "unavailable" : `$${report.globalSpendUsd.toFixed(6)}`;
 	return ` · global cap $${report.globalCostCapUsd.toFixed(2)}/day · account spent ${account}`;
+}
+
+/** The summary line's fleet half, which always says something.
+ *
+ *  `cap $0.50/day · spent $0.000138` when the cap is armed; `no daily cap · spent
+ *  $0.000138` when it is not. The spend figure is printed in both cases because it
+ *  is measured in both cases — turning the cap off stops the refusal, not the
+ *  accounting — and the words exist because a line that simply omitted the clause
+ *  would be indistinguishable from one whose cap was satisfied. Silence is the one
+ *  thing this figure must never be, on a line an operator reads to answer "is the
+ *  fleet still spending?" and "would it have stopped?". */
+export function fleetCapLine(report: Pick<TickReport, "dailyCostCapUsd" | "dailyCostUsd">): string {
+	const spent = `spent $${report.dailyCostUsd.toFixed(6)}`;
+	if (report.dailyCostCapUsd === null) return ` · no daily cap · ${spent}`;
+	return ` · cap $${report.dailyCostCapUsd.toFixed(2)}/day · ${spent}`;
+}
+
+/** The result shape both decision paths have to produce, so the loop below has one
+ *  shape to read. `escalationSkipped` is the one field the adapter path never sets. */
+type DecisionOutcome = EscalationResult & { escalationSkipped?: string };
+
+/** One decision, from whichever path this tick is on — the operator's toggle,
+ *  expressed once.
+ *
+ *  `pi` mode makes exactly one call and never escalates. It says so on the result
+ *  rather than returning a bare `escalated: false`, because "no second call was made"
+ *  and "the rules found no reason to make one" are different facts and a quiet log
+ *  must not conflate them: the first is a property of the mode, the second is the
+ *  ladder agreeing. */
+async function decideFor(args: { mode: DecisionMode; input: DecisionInput; primary: DecisionModel; falsifier: DecisionModel | undefined; triggers: readonly Trigger[] }): Promise<DecisionOutcome> {
+	if (args.mode === "pi") {
+		const decision = await args.primary.decide(args.input);
+		return { decision, escalated: false, escalationFailed: false, trail: [decision], escalationSkipped: "pi mode" };
+	}
+	return decideWithEscalation(args.input, { primary: args.primary, escalator: args.falsifier, triggers: args.triggers });
 }
 
 export async function tick(deps: Deps): Promise<TickReport> {
@@ -741,6 +814,21 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// day's bucket, so the marker would never be found and every tick of the day would
 	// notify again — the 1,440-messages failure the marker exists to prevent.
 	const tickStamp = new Date(tickNow).toISOString();
+	// The decision path, read once. The toggle is a file in the state dir so the GUI can
+	// write it and this loop can see it on the next tick without a restart; reading it
+	// once means every decision in this tick was made by the one path the report names,
+	// which a per-pane read could not promise if the operator flipped it mid-tick.
+	//
+	// A toggle that exists and does not parse is not silence: the reason goes to the log
+	// and into the report, and the supervisor runs the default mode — never "no
+	// decision", because a fleet that stops deciding because a settings file was hand-
+	// edited is a worse outcome than one that keeps deciding the way it used to.
+	// The toggle sits beside `policy.json`: both are small operator-owned files in the
+	// state dir, both are written by the GUI, and both are read by this loop without a
+	// restart, so the pairing is the configuration rather than a path invented here.
+	const modeReading = readDecisionMode(decisionModePath(dirname(config.policyPath)));
+	const mode = modeReading.mode;
+	if (modeReading.note) appendEvent(config, { kind: "decision_mode_fallback", note: modeReading.note, mode });
 	const spend = dailySpend(config.eventsPath, tickNow);
 	const globalCapUsd = config.globalSpendCapUsd;
 	const globalEnabled = globalCapUsd !== null && globalCapUsd > 0;
@@ -820,6 +908,8 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			dailyCostCapUsd: config.dailyCostCapUsd,
 			globalCostCapUsd: fired.scope === "global" ? fired.limitUsd : (globalEnabled ? globalCapUsd : null),
 			globalSpendUsd: fired.scope === "global" ? fired.spendUsd : (wide?.totalUsd ?? null),
+			decisionMode: mode,
+			...(modeReading.note === undefined ? {} : { decisionModeNote: modeReading.note }),
 		};
 	}
 	const claims = readClaims();
@@ -844,8 +934,14 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
 	const cooldowns = readJson<Record<string, number>>(config.cooldownsPath, {});
 	const built = deps.models ? { ...deps.models, falsifier: deps.models.escalator, degraded: undefined } : buildLadderModels(config);
-	const { primary, escalator, falsifier, degraded } = built;
-	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd, globalCostCapUsd: globalEnabled ? globalCapUsd : null, globalSpendUsd: wide?.totalUsd ?? null };
+	const { escalator, degraded } = built;
+	// `pi` mode replaces the decision model with one subprocess call and leaves nothing
+	// to escalate to. The escalator is still built because tier 2 borrows it for its
+	// inspection model — the toggle is about how a *decision* is made, not about which
+	// model reads a trigger — and `falsifier` is undefined so no second call is possible.
+	const primary: DecisionModel = mode === "pi" && deps.models === undefined ? piModel({ timeoutMs: Math.min(PI_TIMEOUT_MS, config.decisionTimeoutMs) }) : built.primary;
+	const falsifier: DecisionModel | undefined = mode === "pi" ? undefined : built.falsifier;
+	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd, globalCostCapUsd: globalEnabled ? globalCapUsd : null, globalSpendUsd: wide?.totalUsd ?? null, decisionMode: mode, ...(modeReading.note === undefined ? {} : { decisionModeNote: modeReading.note }) };
 	const pending = pendingAsks(readAskLog(config.asksPath));
 
 	if (degraded) await notifier.send(degraded, "alert").catch(() => undefined);
@@ -860,7 +956,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			tail = `(terminal read failed: ${(e as Error).message})`;
 		}
 		const input = toInput(move.agent, claim, tail, move.idleTicks);
-		const result = await decideWithEscalation(input, { primary, escalator: falsifier, triggers });
+		const result = await decideFor({ mode, input, primary, falsifier, triggers });
 		return { move, claim, input, result };
 	});
 
@@ -994,6 +1090,14 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				costUsd: decision.costUsd,
 				policy,
 				held: action?.disposition === "held",
+				// Provenance, so no row is ambiguous about how it was made. `mode` is the
+				// toggle this tick read; `reasoning` is what the deciding path actually ran
+				// at — `none` on the `pi` path because the argv says so and its own usage
+				// block reports `reasoning: 0`.
+				mode,
+				reasoning: reasoningOf(mode, config, decision.model),
+				...(entry.result.escalationSkipped === undefined ? {} : { escalationSkipped: entry.result.escalationSkipped }),
+				...tokensOf(decision),
 				decision: describeDecision(decision),
 			}),
 		);
@@ -1194,7 +1298,7 @@ async function main(): Promise<void> {
 		try {
 			const report = await tick({ port, notifier, config });
 			console.error(
-				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dailyCostCapUsd > 0 ? ` · cap $${report.dailyCostCapUsd.toFixed(2)}/day · spent $${report.dailyCostUsd.toFixed(6)}` : ""}${capLine(report)}${report.capped ? ` · capped${report.capScope === "global" ? " (global)" : report.capScope === "fleet" ? " (fleet)" : ""}` : ""}${report.dry ? " (dry)" : ""}`,
+				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${fleetCapLine(report)}${capLine(report)}${report.capped ? ` · capped${report.capScope === "global" ? " (global)" : report.capScope === "fleet" ? " (fleet)" : ""}` : ""}${report.dry ? " (dry)" : ""}`,
 			);
 		} catch (e) {
 			const message = `fleet tick failed: ${(e as Error).message}`;

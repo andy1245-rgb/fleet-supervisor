@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tick, type TickReport } from "../src/manager/tick.ts";
@@ -102,6 +102,14 @@ function events(dir: string): SeqEvent[] {
 		.map((line) => JSON.parse(line) as SeqEvent);
 }
 
+/** The typed `decision` metric row. The tick also writes a legacy prose line of the
+ *  same `kind`, so a test that means the schema row has to say so. */
+function decisionEvent(dir: string): SeqEvent {
+	const found = events(dir).find((event) => event.kind === "decision" && event.schema !== undefined);
+	assert.ok(found !== undefined, "a typed decision row is written");
+	return found;
+}
+
 function tickEvent(dir: string): SeqEvent {
 	const found = events(dir).find((event) => event.kind === "tick");
 	assert.ok(found !== undefined, "every tick writes one tick event");
@@ -110,7 +118,10 @@ function tickEvent(dir: string): SeqEvent {
 
 /** Runs one tick in a throwaway state dir: the manager reads its registry and its
  *  marks from the environment, so both are pointed at the temp dir and restored. */
-async function runTick(dir: string, primary: DecisionModel, escalator: DecisionModel, agents: readonly HerdrAgent[] = AGENTS): Promise<TickReport> {
+async function runTick(dir: string, primary: DecisionModel, escalator: DecisionModel, agents: readonly HerdrAgent[] = AGENTS, mode?: string): Promise<TickReport> {
+	// The toggle is a file beside `policy.json`, so a tick reads whatever the test
+	// wrote before it; `undefined` writes nothing and exercises the default.
+	if (mode !== undefined) writeFileSync(join(dir, "decision-mode.json"), mode);
 	const saved = { registry: process.env.AGENTFLEET_REGISTRY, state: process.env.AGENTFLEET_STATE };
 	process.env.AGENTFLEET_REGISTRY = join(dir, "registry");
 	process.env.AGENTFLEET_STATE = join(dir, "marks.json");
@@ -214,5 +225,65 @@ test("a collision trigger reaches the decision, so the pane it names escalates",
 			report.decisions.map((entry) => entry.argument),
 			["the escalator sees the collision", "the escalator sees the collision"],
 		);
+	});
+});
+
+// ------------------------------------------------------- decision provenance
+//
+// Every decision row names the path that made it. These are the two modes' rows,
+// asserted from the log the tick actually wrote rather than from the report object,
+// because the log is what a later comparison reads.
+
+test("an adapter-mode row names its path and the reasoning level it was sent", async () => {
+	await withDir(async (dir) => {
+		const report = await runTick(dir, fakeModel("commandcode:deepseek/deepseek-v4.1-flash", decision({ op: "leave", model: "commandcode:deepseek/deepseek-v4.1-flash" })), fakeModel("escalator", decision({ op: "leave" })));
+
+		assert.equal(report.decisionMode, "adapter");
+		assert.equal(report.decisionModeNote, undefined, "an unset toggle is a fresh install, not a fault");
+
+		const row = decisionEvent(dir);
+		assert.ok(row !== undefined);
+		assert.equal(row.mode, "adapter");
+		// The hosted responses wire is the only adapter path with a reasoning field, and
+		// `config.effort` is what this test config sends to it.
+		assert.equal(row.reasoning, "low");
+		assert.equal(row.escalated, false);
+		// An adapter row that did not escalate says nothing about skipping: the rules
+		// simply found no reason to ask.
+		assert.equal(row.escalationSkipped, undefined);
+	});
+});
+
+test("a pi-mode row names its path, reports no escalation, and says the ladder never ran", async () => {
+	await withDir(async (dir) => {
+		const report = await runTick(dir, fakeModel("pi:deepseek/deepseek-v4.1-flash", decision({ op: "leave", model: "pi:deepseek/deepseek-v4.1-flash" })), fakeModel("escalator", decision({ op: "nudge", model: "escalator" })), AGENTS, '{"mode":"pi"}\n');
+
+		assert.equal(report.decisionMode, "pi");
+		// The escalator is built and never asked: one call in, one decision out.
+		assert.equal(report.decisions[0]?.model, "pi:deepseek/deepseek-v4.1-flash", "the escalator's opinion is not in the result");
+		assert.equal(report.escalated, 0);
+
+		const row = decisionEvent(dir);
+		assert.ok(row !== undefined);
+		assert.equal(row.mode, "pi");
+		assert.equal(row.reasoning, "none", "the pi path runs with reasoning off, and the row says so");
+		assert.equal(row.escalated, false);
+		// The ladder's silence must not be readable as agreement.
+		assert.equal(row.escalationSkipped, "pi mode");
+	});
+});
+
+test("a toggle that does not parse keeps the default mode and records why", async () => {
+	await withDir(async (dir) => {
+		const report = await runTick(dir, fakeModel("commandcode:deepseek/deepseek-v4.1-flash", decision({ op: "leave", model: "commandcode:deepseek/deepseek-v4.1-flash" })), fakeModel("escalator", decision({ op: "leave" })), AGENTS, '{"mode":"needle-lora"}\n');
+
+		assert.equal(report.decisionMode, "adapter");
+		assert.match(report.decisionModeNote ?? "", /names no known mode/);
+		// Never "no decision": a broken settings file must not stop the fleet deciding.
+		assert.equal(report.decisions.length, 1);
+
+		const fallback = events(dir).find((event) => event.kind === "decision_mode_fallback");
+		assert.ok(fallback !== undefined, "the fallback is in the log, not only in the report");
+		assert.match(String(fallback.note), /needle-lora/);
 	});
 });

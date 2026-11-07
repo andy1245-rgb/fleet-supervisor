@@ -227,15 +227,20 @@ function withDirSync(fn: (dir: string) => void): void {
 
 // ------------------------------------------------------------------ the config
 
-test("the global cap is off by default, and the fleet's own default is untouched", () => {
+test("both caps ship off, and the wide one does not arm the narrow one", () => {
 	assert.equal(DEFAULT_GLOBAL_SPEND_CAP_USD, null, "the mechanism exists and is switched off");
 	assert.equal(loadConfig({}).globalSpendCapUsd, null);
 	assert.equal(loadConfig({ AGENTFLEET_GLOBAL_SPEND_CAP_USD: "" }).globalSpendCapUsd, null, "an empty var is unset");
 	assert.equal(loadConfig({ AGENTFLEET_GLOBAL_SPEND_CAP_USD: "0" }).globalSpendCapUsd, 0, "0 is the other way to say off");
 	assert.equal(loadConfig({ AGENTFLEET_GLOBAL_SPEND_CAP_USD: "20" }).globalSpendCapUsd, 20);
 	assert.equal(loadConfig({ AGENTFLEET_GLOBAL_SPEND_CAP_USD: " .5 " }).globalSpendCapUsd, 0.5);
-	assert.equal(loadConfig({}).dailyCostCapUsd, DEFAULT_DAILY_COST_CAP_USD, "0.50 stays where it was");
-	assert.equal(loadConfig({}).dailyCostCapUsd, 0.5);
+	assert.equal(loadConfig({}).dailyCostCapUsd, DEFAULT_DAILY_COST_CAP_USD, "the fleet's own cap ships off too");
+	assert.equal(loadConfig({}).dailyCostCapUsd, null);
+	// Two independent switches: arming one must not arm the other, or an operator who
+	// set the account-wide limit would find the supervisor refusing on a number he
+	// never wrote.
+	assert.equal(loadConfig({ AGENTFLEET_GLOBAL_SPEND_CAP_USD: "20" }).dailyCostCapUsd, null);
+	assert.equal(loadConfig({ AGENTFLEET_DAILY_COST_CAP_USD: "0.50" }).globalSpendCapUsd, null);
 	assert.match(loadConfig({}).usageLogPath, /usage\.jsonl$/, "the wide cap reads the agent log by default");
 	assert.equal(loadConfig({ AGENTFLEET_USAGE_LOG: "/tmp/other.jsonl" }).usageLogPath, "/tmp/other.jsonl");
 });
