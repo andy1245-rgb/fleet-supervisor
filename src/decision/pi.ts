@@ -42,6 +42,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { renderInput } from "./prompt.ts";
 import { parseDecision, type Decision, type DecisionInput, type DecisionModel } from "./types.ts";
+import { stateDir } from "../fleet/where.ts";
 
 /** The model the operator named, on the provider the adapter path already uses. */
 export const PI_MODEL = "deepseek/deepseek-v4.1-flash";
@@ -310,7 +311,7 @@ function failure(reason: string, meta: { model: string; latencyMs: number }, usa
 export function piModel(options: PiOptions = {}): PiModel {
 	const model = options.model ?? PI_MODEL;
 	const timeoutMs = options.timeoutMs ?? PI_TIMEOUT_MS;
-	const agentDir = options.agentDir ?? join(homedir(), ".pi", "agent", "fleet-state", "pi-agent");
+	const agentDir = options.agentDir ?? join(stateDir(), "pi-agent");
 	const run = options.run ?? spawnRunner;
 	const name = `pi:${model}`;
 	// A subscription-free per-token call: the measured price of one decision, doubled

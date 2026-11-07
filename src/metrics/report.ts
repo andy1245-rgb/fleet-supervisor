@@ -246,11 +246,11 @@ export interface ReportInput {
 
 // ------------------------------------------------------------------- helpers
 
-function ratio(count: number, total: number): number | null {
+export function ratio(count: number, total: number): number | null {
 	return total === 0 ? null : count / total;
 }
 
-function share(count: number, total: number): number {
+export function share(count: number, total: number): number {
 	return total === 0 ? 0 : count / total;
 }
 
@@ -258,20 +258,20 @@ function mean(total: number, count: number): number | null {
 	return count === 0 ? null : total / count;
 }
 
-function sorted(values: readonly number[]): number[] {
+export function sorted(values: readonly number[]): number[] {
 	return [...values].sort((a, b) => a - b);
 }
 
 /** Nearest-rank percentile: the smallest value at or above the p-th rank. No
  *  interpolation, so every number printed is a value that actually occurred. */
-function percentile(ordered: readonly number[], p: number): number | null {
+export function percentile(ordered: readonly number[], p: number): number | null {
 	if (ordered.length === 0) return null;
 	const rank = Math.ceil(p * ordered.length) - 1;
 	const index = Math.min(ordered.length - 1, Math.max(0, rank));
 	return ordered[index] ?? null;
 }
 
-function distribution(values: readonly number[]): Distribution {
+export function distribution(values: readonly number[]): Distribution {
 	const ordered = sorted(values);
 	return {
 		n: ordered.length,
@@ -323,7 +323,7 @@ const DISPOSITIONS = ["sent", "held", "rejected", "skipped", "dry"] as const;
 
 // --------------------------------------------------------------- aggregation
 
-function decisionsReport(decisions: readonly DecisionEvent[]): DecisionsReport {
+export function decisionsReport(decisions: readonly DecisionEvent[]): DecisionsReport {
 	const total = decisions.length;
 
 	const opMix = OPS.map((op) => {
@@ -386,7 +386,7 @@ function decisionsReport(decisions: readonly DecisionEvent[]): DecisionsReport {
 	};
 }
 
-function actionsReport(actions: readonly ActionEvent[]): ActionsReport {
+export function actionsReport(actions: readonly ActionEvent[]): ActionsReport {
 	const total = actions.length;
 
 	const byDisposition = DISPOSITIONS.map((disposition) => {
@@ -473,7 +473,7 @@ function ticksReport(ticks: readonly TickEvent[]): TicksReport {
 	};
 }
 
-function triggersReport(triggers: readonly TriggerEvent[], ticks: readonly TickEvent[]): TriggersReport {
+export function triggersReport(triggers: readonly TriggerEvent[], ticks: readonly TickEvent[]): TriggersReport {
 	const byKind = ranked(countBy(triggers, (trigger) => trigger.triggerKind)).map(({ key, items }) => ({
 		kind: key,
 		count: items.length,
@@ -489,7 +489,7 @@ function triggersReport(triggers: readonly TriggerEvent[], ticks: readonly TickE
 	};
 }
 
-function inspectionsReport(inspections: readonly InspectionEvent[], ticks: readonly TickEvent[]): InspectionsReport {
+export function inspectionsReport(inspections: readonly InspectionEvent[], ticks: readonly TickEvent[]): InspectionsReport {
 	const total = inspections.length;
 	const byMode = ranked(countBy(inspections, (inspection) => inspection.mode)).map(({ key, items }) => ({ mode: key, count: items.length }));
 	const byTriggerKind = ranked(countBy(inspections, (inspection) => inspection.triggerKind)).map(({ key, items }) => {
@@ -526,7 +526,7 @@ function claimsReport(claims: readonly ClaimEvent[]): ClaimsReport {
 	return { total: claims.length, byState, diverged: { count: diverged, rate: ratio(diverged, claims.length) }, ageMs: distribution(ages) };
 }
 
-function outcomesReport(outcomes: readonly OutcomeEvent[]): OutcomesReport {
+export function outcomesReport(outcomes: readonly OutcomeEvent[]): OutcomesReport {
 	const total = outcomes.length;
 
 	const byOpKind = ranked(countBy(outcomes, (outcome) => `${outcome.op}:${outcome.outcomeKind}`)).map(({ items }) => {
@@ -568,7 +568,7 @@ export function outcomeSummary(report: OutcomesReport): string {
 	return `outcomes ${report.total} (${pairs}) · silent-decision precision ${report.silence.precisionText}`;
 }
 
-function coverageOf(events: readonly SchemaEvent[]): FieldCoverage[] {
+export function coverageOf(events: readonly SchemaEvent[]): FieldCoverage[] {
 	const has = (event: SchemaEvent, key: string): boolean => (event as unknown as Record<string, unknown>)[key] !== undefined;
 	const out: FieldCoverage[] = [];
 	const probe = (kind: SchemaEvent["kind"], field: string): void => {

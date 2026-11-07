@@ -19,9 +19,10 @@
 //     reader is a tick that may run at any moment and a half-written file must never
 //     be the thing that decides how the fleet is supervised.
 
-import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { writeJsonAtomic } from "../fleet/settings.ts";
 
 export type DecisionMode = "pi" | "adapter";
 
@@ -99,18 +100,10 @@ export function readDecisionMode(path: string): ModeReading {
 
 /** Write the setting, atomically.
  *
- *  Sibling temp file + rename: `rename` is atomic inside one filesystem, so a reader
- *  either sees the old contents or the new ones and never a truncated object. The
- *  temp file is removed if the rename fails, so a read-only directory leaves no
- *  litter behind a failed write. */
+ *  One writer for the whole tree: `src/fleet/settings.ts`'s `writeJsonAtomic` (sibling temp
+ *  file, rename over the target). The reader is a tick that may run at any moment, so a
+ *  half-written file must never be the thing that decides how the fleet is supervised —
+ *  and that rule belongs in one place, not in four near-copies. */
 export function writeDecisionMode(path: string, mode: DecisionMode): void {
-	const body = `${JSON.stringify({ mode, updatedAt: new Date().toISOString() }, null, "\t")}\n`;
-	const tmp = `${path}.${process.pid}.tmp`;
-	try {
-		writeFileSync(tmp, body);
-		renameSync(tmp, path);
-	} catch (e) {
-		rmSync(tmp, { force: true });
-		throw e;
-	}
+	writeJsonAtomic(path, { mode, updatedAt: new Date().toISOString() });
 }

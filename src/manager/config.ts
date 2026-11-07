@@ -47,6 +47,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_TIMEOUT_MS, EFFORTS, type ReasoningEffort } from "../decision/adapters/commandcode.ts";
 import { isAskPolicy, normalizePolicy, type AskPolicy } from "./ask.ts";
+import { stateDir } from "../fleet/where.ts";
 
 /** How far the manager goes when a cross-agent trigger fires. */
 export type InspectorMode = "off" | "cheap" | "deep";
@@ -250,7 +251,7 @@ export function askPolicyFor(config: Config, group: string): AskPolicy {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-	const state = env.AGENTFLEET_STATE_DIR || join(homedir(), ".pi", "agent", "fleet-state");
+	const state = stateDir(env);
 	const policyPath = join(state, "policy.json");
 	return {
 		intervalMs: num(env.AGENTFLEET_INTERVAL_MS, 60_000),

@@ -12,12 +12,13 @@
 // now or parked for the operator is a per-group policy, and a parked action is
 // written to asks.jsonl instead of performed. See ./answer.ts for the channel.
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { herdrPort } from "../herdr/cli.ts";
 import type { HerdrAgent, HerdrPort } from "../herdr/types.ts";
 import { detect, loadMarks, saveMarks, type Marks } from "../fleet/detect.ts";
+import { writeJsonAtomic } from "../fleet/settings.ts";
 import { groupOf } from "../fleet/groups.ts";
 import { readClaims, writeClaim, type Claim } from "../fleet/registry.ts";
 import { commandcodeModel, type ReasoningEffort } from "../decision/adapters/commandcode.ts";
@@ -97,11 +98,12 @@ function readJson<T>(path: string, fallback: T): T {
 	}
 }
 
+/** The state dir this supervisor writes into may not exist yet on a box that has never
+ *  ticked, so the directory is created here and the write itself goes through the one
+ *  atomic writer (`src/fleet/settings.ts`). */
 function writeJson(path: string, value: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(value, null, "\t")}\n`);
-	renameSync(tmp, path);
+	writeJsonAtomic(path, value);
 }
 
 function appendEvent(config: Config, event: Record<string, unknown>): void {

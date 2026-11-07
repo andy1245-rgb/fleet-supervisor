@@ -40,7 +40,7 @@ function toForks(raw: unknown): Fork[] {
 }
 
 /** The file is editable by hand, so every field is re-checked on the way in. */
-function toRecord(raw: unknown): AskRecord | undefined {
+export function toRecord(raw: unknown): AskRecord | undefined {
 	if (typeof raw !== "object" || raw === null) return undefined;
 	const r = raw as Record<string, unknown>;
 	const id = str(r.id);

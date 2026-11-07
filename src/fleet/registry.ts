@@ -46,7 +46,7 @@ function str(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value : fallback;
 }
 
-function toClaim(raw: unknown): Claim | undefined {
+export function toClaim(raw: unknown): Claim | undefined {
 	if (typeof raw !== "object" || raw === null) return undefined;
 	const r = raw as Record<string, unknown>;
 	const paneId = str(r.paneId);

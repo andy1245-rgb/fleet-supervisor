@@ -8,6 +8,7 @@
 // returns envelopes and never folds a code into an exception.
 
 import { spawn } from "node:child_process";
+import type { AgentSession, Row } from "../fleet/types.ts";
 import type { AgentStatus, HerdrAgent, HerdrPort, PromptResult } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -91,25 +92,65 @@ function num(value: unknown, fallback = 0): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** Validates the wire shape here so no caller has to guess whether a field exists. */
-function toAgent(raw: unknown): HerdrAgent | undefined {
-	if (typeof raw !== "object" || raw === null) return undefined;
+/** `agent_session`'s own object: the pane's transcript, in herdr's words. */
+function sessionOf(raw: unknown): AgentSession | null {
+	if (typeof raw !== "object" || raw === null) return null;
 	const r = raw as Record<string, unknown>;
-	const paneId = str(r.pane_id);
+	const value = str(r.value);
+	if (!value) return null;
+	return { agent: str(r.agent), kind: str(r.kind, "path"), source: str(r.source), value };
+}
+
+/** The one wire validator. `pane` is snapshotted "panes" row (`label`, `revision`,
+ *  `terminal_id`) and `agent` is the same pane's `agents` row (`completion_seq`,
+ *  `state_change_seq`, `agent_session`). Anything either of them carries is kept, so
+ *  no caller has to guess whether a field exists.
+ *
+ * The four fields this keeps that the old `toAgent` dropped are the prerequisite for
+ * the name chain and the identity join: `label` is rung 1 of `nameOf`, `revision` is
+ * what makes a change observable without a second read, `terminal_id` is the pane's
+ * own handle, and `agent_session` is what `sessionOf` joins on. */
+export function toRow(pane: unknown, agent?: unknown): Row | undefined {
+	const p = typeof pane === "object" && pane !== null ? (pane as Record<string, unknown>) : {};
+	const a = typeof agent === "object" && agent !== null ? (agent as Record<string, unknown>) : {};
+	const paneId = str(p.pane_id) || str(a.pane_id);
 	if (!paneId) return undefined;
-	const cwd = str(r.cwd);
+	const cwd = str(p.cwd) || str(a.cwd);
+	const label = typeof p.label === "string" && p.label.trim() !== "" ? p.label : null;
 	return {
-		paneId,
-		agent: str(r.agent, "unknown"),
-		status: status(r.agent_status),
+		pane_id: paneId,
+		workspace_id: str(p.workspace_id) || str(a.workspace_id),
+		tab_id: str(p.tab_id) || str(a.tab_id),
+		agent: str(p.agent) || str(a.agent, "unknown"),
+		agent_status: status(str(p.agent_status) || str(a.agent_status)),
 		cwd,
-		foregroundCwd: str(r.foreground_cwd, cwd),
-		workspaceId: str(r.workspace_id),
-		tabId: str(r.tab_id),
-		title: str(r.terminal_title_stripped, str(r.terminal_title)),
-		completionSeq: num(r.completion_seq),
-		stateChangeSeq: num(r.state_change_seq),
-		focused: r.focused === true,
+		foreground_cwd: str(p.foreground_cwd) || str(a.foreground_cwd, cwd),
+		focused: p.focused === true || a.focused === true,
+		label,
+		revision: num(p.revision, num(a.revision)),
+		terminal_id: str(p.terminal_id) || str(a.terminal_id),
+		terminal_title: str(p.terminal_title) || str(a.terminal_title),
+		terminal_title_stripped: str(p.terminal_title_stripped) || str(a.terminal_title_stripped),
+		agent_session: sessionOf(a.agent_session ?? p.agent_session),
+		completion_seq: num(a.completion_seq),
+		state_change_seq: num(a.state_change_seq),
+	};
+}
+
+/** The port's own shape, derived from the row so there is one validator and not two. */
+export function agentOf(row: Row): HerdrAgent {
+	return {
+		paneId: row.pane_id,
+		agent: row.agent,
+		status: status(row.agent_status),
+		cwd: row.cwd,
+		foregroundCwd: row.foreground_cwd || row.cwd,
+		workspaceId: row.workspace_id,
+		tabId: row.tab_id,
+		title: row.terminal_title_stripped || row.terminal_title,
+		completionSeq: row.completion_seq,
+		stateChangeSeq: row.state_change_seq,
+		focused: row.focused,
 	};
 }
 
@@ -117,7 +158,100 @@ function agentsFrom(result: unknown): HerdrAgent[] {
 	if (typeof result !== "object" || result === null) return [];
 	const list = (result as { agents?: unknown }).agents;
 	if (!Array.isArray(list)) return [];
-	return list.map(toAgent).filter((a): a is HerdrAgent => a !== undefined);
+	return list.map((raw) => toRow(raw)).filter((row): row is Row => row !== undefined).map(agentOf);
+}
+
+/** One `herdr api snapshot`: the whole fleet, panes and agents, in one call.
+ *
+ * `panes` carries what the sidebar shows (`label`, `revision`, `terminal_id`);
+ * `agents` carries the counters and the session report; neither carries both, so the
+ * rows every caller wants are the join of the two on `pane_id`. `revision` is the
+ * highest pane revision in the snapshot: a monotone counter that bumps when anything
+ * about any pane changes, which is what a change detector needs.
+ *
+ * A herdr without `api snapshot` falls back to `agent list` rather than failing: the
+ * supervisor's own read path predates the snapshot and must keep working. The
+ * fallback is recorded (`origin`, `reason`) instead of being hidden, because a row
+ * with no `label` is the difference between `unnamed` and pi's chrome. */
+export interface Snapshot {
+	revision: number;
+	panes: Row[];
+	agents: Row[];
+	rows: Row[];
+	focusedPaneId: string | null;
+	focusedWorkspaceId: string | null;
+	focusedTabId: string | null;
+	protocol: number | null;
+	version: string | null;
+	origin: "snapshot" | "agents";
+	reason: string | null;
+}
+
+function rowsOf(list: unknown): Row[] {
+	if (!Array.isArray(list)) return [];
+	return list.map((raw) => toRow(raw)).filter((row): row is Row => row !== undefined);
+}
+
+export async function snapshot(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Snapshot> {
+	const empty: Snapshot = {
+		revision: 0,
+		panes: [],
+		agents: [],
+		rows: [],
+		focusedPaneId: null,
+		focusedWorkspaceId: null,
+		focusedTabId: null,
+		protocol: null,
+		version: null,
+		origin: "snapshot",
+		reason: null,
+	};
+
+	let envelope: Call;
+	try {
+		envelope = await call(["api", "snapshot"], timeoutMs);
+	} catch (error) {
+		envelope = { ok: false, code: "transport", message: error instanceof Error ? error.message : "spawn failed" };
+	}
+
+	if (envelope.ok) {
+		const result = typeof envelope.result === "object" && envelope.result !== null ? (envelope.result as Record<string, unknown>) : {};
+		const snap = typeof result.snapshot === "object" && result.snapshot !== null ? (result.snapshot as Record<string, unknown>) : result;
+		const panes = rowsOf(snap.panes);
+		const agents = rowsOf(snap.agents);
+		const byPane = new Map(agents.map((agent) => [agent.pane_id, agent]));
+		const rows = panes.length > 0
+			? panes.map((pane) => {
+				const agent = byPane.get(pane.pane_id);
+				return agent === undefined ? pane : { ...pane, completion_seq: agent.completion_seq, state_change_seq: agent.state_change_seq, agent_session: agent.agent_session };
+			})
+			: agents;
+		return {
+			...empty,
+			revision: panes.reduce((max, pane) => (pane.revision > max ? pane.revision : max), 0),
+			panes,
+			agents,
+			rows,
+			focusedPaneId: str(snap.focused_pane_id) || null,
+			focusedWorkspaceId: str(snap.focused_workspace_id) || null,
+			focusedTabId: str(snap.focused_tab_id) || null,
+			protocol: typeof snap.protocol === "number" ? snap.protocol : null,
+			version: str(snap.version) || null,
+		};
+	}
+
+	const reason = `herdr api snapshot: ${envelope.code}: ${envelope.message}`;
+	const listed = await call(["agent", "list"], timeoutMs);
+	if (!listed.ok) return { ...empty, origin: "agents", reason: `${reason}; herdr agent list: ${listed.code}: ${listed.message}` };
+	const rows = rowsOf(typeof listed.result === "object" && listed.result !== null ? (listed.result as Record<string, unknown>).agents : undefined);
+	return {
+		...empty,
+		origin: "agents",
+		reason,
+		agents: rows,
+		rows,
+		revision: rows.reduce((max, row) => (row.revision > max ? row.revision : max), 0),
+	};
 }
 
 /** The TUI pads every line to the pane width, so a naive read is mostly spaces. */
@@ -145,7 +279,8 @@ export function herdrPort(): HerdrPort {
 			const res = await call(["agent", "get", paneId]);
 			if (!res.ok) return undefined;
 			if (typeof res.result !== "object" || res.result === null) return undefined;
-			return toAgent((res.result as { agent?: unknown }).agent);
+			const row = toRow((res.result as { agent?: unknown }).agent);
+			return row === undefined ? undefined : agentOf(row);
 		},
 
 		async read(paneId: string, lines: number): Promise<string> {
@@ -165,8 +300,8 @@ export function herdrPort(): HerdrPort {
 			);
 			if (res.ok) {
 				const observed = typeof res.result === "object" && res.result !== null ? (res.result as { agent?: unknown }).agent : undefined;
-				const parsed = toAgent(observed);
-				return parsed ? { disposition: "accepted", observed: parsed.status } : { disposition: "accepted" };
+				const parsed = toRow(observed);
+				return parsed ? { disposition: "accepted", observed: agentOf(parsed).status } : { disposition: "accepted" };
 			}
 			if (REFUSALS.has(res.code)) return { disposition: "rejected", reason: res.code };
 			throw new Error(`herdr agent prompt ${paneId}: ${res.code}: ${res.message}`);

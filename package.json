@@ -10,7 +10,7 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "node --test test/*.test.ts",
+		"test": "node --test 'test/**/*.test.ts' 'test/**/*.test.mjs'",
 		"mine": "node mine/decision-points.ts",
 		"bench": "node bench/runners/run.ts",
 		"rescore": "node bench/runners/rescore.ts",

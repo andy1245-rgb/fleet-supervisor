@@ -7,9 +7,9 @@
 // consecutive ticks has silently stopped.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentStatus, HerdrAgent } from "../herdr/types.ts";
+import { stateDir } from "./where.ts";
 
 export interface Mark {
 	completionSeq: number;
@@ -33,7 +33,7 @@ export interface Move {
 }
 
 export function statePath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.AGENTFLEET_STATE || join(homedir(), ".pi", "agent", "fleet-state", "marks.json");
+	return env.AGENTFLEET_STATE || join(stateDir(), "marks.json");
 }
 
 export function loadMarks(path = statePath()): Marks {
