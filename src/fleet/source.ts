@@ -256,6 +256,11 @@ function markMap(value: unknown): Record<string, Mark> {
 		if (typeof row.status === "string") entry.status = row.status;
 		if (typeof row.firstSeen === "string") entry.firstSeen = row.firstSeen;
 		if (typeof row.lastSeen === "string") entry.lastSeen = row.lastSeen;
+		// The two sequences are the whole comparison behind "did this pane move". Dropped
+		// here they do not read as zero, they read as no fact at all, and the rail's moved
+		// column shows `0 / n` for a fleet where every pane moved.
+		if (typeof row.completionSeq === "number") entry.completionSeq = row.completionSeq;
+		if (typeof row.stateChangeSeq === "number") entry.stateChangeSeq = row.stateChangeSeq;
 		out[paneId] = entry;
 	}
 	return out;

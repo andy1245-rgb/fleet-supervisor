@@ -13,10 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { detect } from "../../src/fleet/detect.ts";
 import { defaultOptions } from "../../src/fleet/envelope.ts";
 import { readEventLog } from "../../src/fleet/events.ts";
 import { decisionAxis, paneAxis, resetPaneCache, scopeOf, sourceOf } from "../../src/fleet/source.ts";
-import type { PaneList } from "../../src/fleet/types.ts";
+import type { Mark, PaneList } from "../../src/fleet/types.ts";
+import { agent } from "../fixtures.ts";
 
 function tempDir(): string {
 	return mkdtempSync(join(tmpdir(), "fleet-source-"));
@@ -143,6 +145,61 @@ test("comparable is true only when the records and the pane list came from the s
 	assert.equal(none.comparable, false);
 	assert.equal(none.panes.kind, "none");
 	assert.match(none.why, /no pane list/);
+});
+
+test("every field the supervisor writes into marks.json survives the load", async () => {
+	// A mark is the supervisor's memory of the last tick, and the whole of it is what makes
+	// "did this pane move" answerable: the two sequences are the comparison, and the GUI
+	// reads `typeof mark.completionSeq === "number"` to decide whether it has a fact at all.
+	// A field this loader drops is a column that silently reads zero, so the fixture is
+	// `detect()`'s own output rather than a hand-written object: a writer that grows a field
+	// fails here instead of on the page.
+	const dir = tempDir();
+	resetPaneCache();
+	try {
+		const written = detect(
+			[
+				agent("w4X:p1", { status: "working", completionSeq: 7, stateChangeSeq: 12 }),
+				agent("w4X:p2", { status: "idle", completionSeq: 3, stateChangeSeq: 41 }),
+			],
+			{},
+			"2026-01-01T00:00:00.000Z",
+		).marks;
+		// The log is what makes this a live load; its content is not what is under test.
+		writeFileSync(
+			join(dir, "events.jsonl"),
+			`${JSON.stringify({ schema: 2, ts: "2026-01-01T00:00:00.000Z", kind: "tick", agents: 2, moved: 2, decisions: 0, escalated: 0, escalationFailed: 0, triggers: 0, inspected: 0, prompts: 0, held: 0, costUsd: 0, durationMs: 1, models: [], dry: true })}\n`,
+		);
+		writeFileSync(join(dir, "marks.json"), `${JSON.stringify(written, null, "\t")}\n`);
+
+		const source = await sourceOf(defaultOptions({ dataDir: dir, herdr: false }), 1_700_000_000_000);
+		assert.equal("error" in source, false);
+		if ("error" in source) return;
+
+		assert.deepEqual(Object.keys(source.marks).sort(), ["w4X:p1", "w4X:p2"]);
+		for (const paneId of ["w4X:p1", "w4X:p2"]) {
+			const expected = written[paneId];
+			assert.ok(expected, `detect() wrote a mark for ${paneId}`);
+			assert.deepEqual(source.marks[paneId], expected, `${paneId}: the load must carry all of ${Object.keys(expected).join(", ")}`);
+		}
+
+		// The comparison the rail draws, spelled the way the GUI spells it: a mark without
+		// sequences cannot answer "did it move", and answers `null` instead. Both panes are
+		// past the sequences the supervisor recorded, so both must read as moved.
+		const live = new Map([
+			["w4X:p1", { completionSeq: 9, stateChangeSeq: 12 }],
+			["w4X:p2", { completionSeq: 3, stateChangeSeq: 44 }],
+		]);
+		const moved = [...live.entries()].filter(([paneId, now]) => {
+			const mark: Mark | undefined = source.marks[paneId];
+			if (mark === undefined || typeof mark.completionSeq !== "number") return false;
+			const byState = typeof mark.stateChangeSeq === "number" ? now.stateChangeSeq - mark.stateChangeSeq : 0;
+			return now.completionSeq - mark.completionSeq !== 0 || byState !== 0;
+		});
+		assert.deepEqual(moved.map(([paneId]) => paneId), ["w4X:p1", "w4X:p2"], "both panes moved, so both must be countable as moved");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("a cartesian record load is live even when the pane list is missing", () => {
