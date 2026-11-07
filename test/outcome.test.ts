@@ -350,6 +350,8 @@ function liveConfig(dir: string): Config {
 		maxPromptsPerTick: 3,
 		nudgeCooldownMin: 10,
 		dailyCostCapUsd: 0,
+		globalSpendCapUsd: null,
+		usageLogPath: join(dir, "usage.jsonl"),
 		inspector: "off",
 		maxInspectionsPerTick: 0,
 		ask: "never",

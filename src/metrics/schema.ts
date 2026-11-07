@@ -195,6 +195,22 @@ export interface TickEvent extends Base {
 	dailyCostUsd?: number;
 	/** The cap in force, in dollars. Absent when the cap is disabled. */
 	dailyCostCapUsd?: number;
+	/** Which cap stopped this tick, when one did. Both caps can be enabled and only
+	 *  the lower one fires, so the row has to say which — a reader cannot re-derive it
+	 *  from the two limits without knowing the spends. */
+	capScope?: "fleet" | "global";
+	/** The global cap in force, in dollars. Absent when it is disabled, which is its
+	 *  default. */
+	globalCostCapUsd?: number;
+	/** Total spend for the **UTC** day across every agent on this machine plus this
+	 *  supervisor, when the row was written. Absent when the cap is disabled *and*
+	 *  absent when the agent log could not be read: an unreadable source is not a spend
+	 *  of zero, and a row that said `0` would be the exact lie this field exists to
+	 *  prevent. */
+	globalSpendUsd?: number;
+	/** Where the agent half of `globalSpendUsd` came from, or `unavailable` when it
+	 *  could not be read at all (the tick then fails open and says so out loud). */
+	globalSpendSource?: "usage.jsonl" | "unavailable";
 }
 
 /** One cross-agent trigger, as the scan found it. Log-only triggers (churn with
@@ -379,6 +395,10 @@ const TICK_FIELDS: readonly FieldSpec[] = [
 	{ key: "capReason", type: "string", required: false },
 	{ key: "dailyCostUsd", type: "number", required: false },
 	{ key: "dailyCostCapUsd", type: "number", required: false },
+	{ key: "capScope", type: "string", required: false },
+	{ key: "globalCostCapUsd", type: "number", required: false },
+	{ key: "globalSpendUsd", type: "number", required: false },
+	{ key: "globalSpendSource", type: "string", required: false },
 ];
 
 const TRIGGER_FIELDS: readonly FieldSpec[] = [
@@ -607,6 +627,10 @@ export interface TickRecord {
 	capReason?: string;
 	dailyCostUsd?: number;
 	dailyCostCapUsd?: number;
+	capScope?: "fleet" | "global";
+	globalCostCapUsd?: number;
+	globalSpendUsd?: number;
+	globalSpendSource?: "usage.jsonl" | "unavailable";
 	ts?: string;
 }
 

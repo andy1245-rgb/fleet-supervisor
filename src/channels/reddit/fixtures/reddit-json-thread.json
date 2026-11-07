@@ -1,0 +1,105 @@
+[
+	{
+		"kind": "Listing",
+		"data": {
+			"after": null,
+			"before": null,
+			"children": [
+				{
+					"kind": "t3",
+					"data": {
+						"id": "1tld3qq",
+						"name": "t3_1tld3qq",
+						"subreddit": "MechanicalKeyboards",
+						"title": "Lofree Flow 2 84 review | low-profile mechanical done in metal",
+						"author": "rajvir_03",
+						"score": 412,
+						"num_comments": 15,
+						"created_utc": 1788662768,
+						"permalink": "/r/MechanicalKeyboards/comments/1tld3qq/lofree_flow_2_84_review_lowprofile_mechanical/",
+						"over_18": false,
+						"removed_by_category": null
+					}
+				}
+			]
+		}
+	},
+	{
+		"kind": "Listing",
+		"data": {
+			"after": null,
+			"before": null,
+			"children": [
+				{
+					"kind": "t1",
+					"data": {
+						"id": "oneop6a",
+						"parent_id": "t3_1tld3qq",
+						"author": "rajvir_03",
+						"score": 88,
+						"created_utc": 1788662826,
+						"distinguished": null,
+						"removed_by_category": null,
+						"body": "Quick TL;DR for anyone skimming:\n\nPros: POM switches are genuinely the best feeling low-profile switches I've used stock, aluminum chassis feels properly premium, 2.4GHz wireless is rock solid at 1000Hz, VIA/QMK support is a big deal for customization\n\nCons: stabilizer ping on spacebar/enter needs manual fixing with dielectric grease, touch bar is basically useless and needs to be locked via firmware, Bluetooth sleep delay drops your first few keystrokes"
+					}
+				},
+				{
+					"kind": "t1",
+					"data": {
+						"id": "oneos2b",
+						"parent_id": "t1_oneop6a",
+						"author": "tactile_fan",
+						"score": 41,
+						"created_utc": 1788663190,
+						"distinguished": null,
+						"removed_by_category": null,
+						"body": "Not worth it at $159 in my opinion. The stab ping is a real problem and the cheaper Keychron Q2 has none of it out of the box, and Superlube is 90% as good for a third of the price if you do have to fix it yourself."
+					}
+				},
+				{
+					"kind": "t1",
+					"data": {
+						"id": "oneq7de",
+						"parent_id": "t3_1tld3qq",
+						"author": "AutoModerator",
+						"score": 1,
+						"created_utc": 1788662769,
+						"distinguished": "moderator",
+						"removed_by_category": null,
+						"body": "If you are posting a Review, make sure you fully disclose any potential conflicts of interest such as whether you were sponsored for the product, received it for free, or sell similar products."
+					}
+				},
+				{
+					"kind": "t1",
+					"data": {
+						"id": "oneqk1x",
+						"parent_id": "t3_1tld3qq",
+						"author": "hidden_score_user",
+						"score": null,
+						"created_utc": 1788662901,
+						"distinguished": null,
+						"removed_by_category": null,
+						"body": "Thanks for the writeup. I recommend waiting for the firmware fix before buying, because the bluetooth sleep delay is genuinely annoying in daily use and the touch bar cannot be remapped yet."
+					}
+				},
+				{
+					"kind": "t1",
+					"data": {
+						"id": "oneqo0c",
+						"parent_id": "t1_oneop6a",
+						"author": "deleted_account",
+						"score": 12,
+						"created_utc": 1788662950,
+						"distinguished": null,
+						"removed_by_category": "moderator",
+						"body": "[removed]"
+					}
+				},
+				{
+					"kind": "more",
+					"data": { "count": 10, "children": ["oneop6a", "oneos2b"], "id": "more_1tld3qq", "parent_id": "t3_1tld3qq" }
+				}
+			]
+		}
+	}
+]

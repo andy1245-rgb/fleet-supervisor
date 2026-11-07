@@ -31,7 +31,8 @@ import { scan as watchdogScan, formatAge, findingFields } from "../watchdog/rule
 import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
 import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
-import { dailySpend } from "../metrics/daily.ts";
+import { dailySpend, utcDay } from "../metrics/daily.ts";
+import { globalSpend, type GlobalSpend } from "../metrics/global.ts";
 import { inspect, type Finding } from "./inspector.ts";
 import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type SchemaEvent } from "../metrics/schema.ts";
 import { DEFAULT_WINDOW_TICKS, decidedAt, isSilent, judge, observedTicks, parsePending, pendingJson, pendingPath, recordPending, type Observation, type PendingDecision } from "../metrics/outcome.ts";
@@ -53,14 +54,21 @@ export interface TickReport {
 	escalationFailed: number;
 	costUsd: number;
 	dry: boolean;
-	/** True when the daily cap skipped this tick's model calls: nothing was
-	 *  consulted, no `decision` row was written, and the panes that moved are still
-	 *  waiting for the next tick that can afford them. */
+	/** True when a cap skipped this tick's model calls: nothing was consulted, no
+	 *  `decision` row was written, and the panes that moved are still waiting for the
+	 *  next tick that can afford them. */
 	capped: boolean;
+	/** Which cap stopped it, when one did. */
+	capScope?: "fleet" | "global";
 	/** Today's spend, this tick's own cost included, and the cap in force in dollars
 	 *  (`0` when the cap is disabled). */
 	dailyCostUsd: number;
 	dailyCostCapUsd: number;
+	/** The global cap in force (`null` when disabled) and the UTC day's total across
+	 *  every agent plus this supervisor (`null` when the source could not be read, or
+	 *  when the cap is disabled and nothing was measured). */
+	globalCostCapUsd: number | null;
+	globalSpendUsd: number | null;
 }
 
 export interface Deps {
@@ -625,6 +633,74 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 	return { held: false, prompted: true, askRecorded };
 }
 
+/** A cap that has been reached, and the spend it measured. */
+interface CapFire {
+	scope: "fleet" | "global";
+	limitUsd: number;
+	spendUsd: number;
+}
+
+/** Which cap stops this tick, if any — the whole precedence rule, in one place.
+ *
+ *  A cap is only ever a promise that the fleet will not spend past a number, so with
+ *  two promises the smaller one holds: whichever enabled cap is lower and has been
+ *  reached is the one that fires. A cap that is disabled (`0`, or `null` for the wide
+ *  one) contributes no candidate, so two disabled caps block nothing. A reach it is
+ *  at the boundary, `>=`, because the supervisor stops *at* the cap and a GUI that
+ *  warns on the same number must not disagree with it. A tie goes to the fleet cap,
+ *  the narrower of the two, so one configuration cannot record two different scopes.
+ *
+ *  A global cap whose spend is `null` — the agent log could not be read — is not a
+ *  candidate: an unknown total is not evidence that a limit was reached, and the
+ *  fail-open path above has already said so out loud. */
+function capFired(args: { fleetCapUsd: number; fleetSpendUsd: number; globalCapUsd: number | null; globalSpendUsd: number | null }): CapFire | undefined {
+	const candidates: CapFire[] = [];
+	if (args.fleetCapUsd > 0 && args.fleetSpendUsd >= args.fleetCapUsd) {
+		candidates.push({ scope: "fleet", limitUsd: args.fleetCapUsd, spendUsd: args.fleetSpendUsd });
+	}
+	const globalCapUsd = args.globalCapUsd;
+	const globalSpendUsd = args.globalSpendUsd;
+	if (globalCapUsd !== null && globalCapUsd > 0 && globalSpendUsd !== null && globalSpendUsd >= globalCapUsd) {
+		candidates.push({ scope: "global", limitUsd: globalCapUsd, spendUsd: globalSpendUsd });
+	}
+	if (candidates.length === 0) return undefined;
+	return candidates.reduce((best, next) => (next.limitUsd < best.limitUsd ? next : best));
+}
+
+/** The cap fields every tick row carries, so a page can show both limits and both
+ *  readings without re-deriving what the supervisor decided.
+ *
+ *  A disabled cap writes **no field**: absent is how this repo says "not in force",
+ *  and a `0` limit on the row would read as a cap of zero dollars rather than as no
+ *  cap. The global reading follows the same rule for a different reason — an
+ *  unreadable source writes `globalSpendSource: "unavailable"` and no
+ *  `globalSpendUsd`, because a `0` there would be a measurement nobody made. */
+function capFields(
+	config: Config,
+	wide: GlobalSpend | undefined,
+	ownCostUsd: number,
+): { dailyCostCapUsd?: number; globalCostCapUsd?: number; globalSpendUsd?: number; globalSpendSource?: "usage.jsonl" | "unavailable" } {
+	const fields: { dailyCostCapUsd?: number; globalCostCapUsd?: number; globalSpendUsd?: number; globalSpendSource?: "usage.jsonl" | "unavailable" } = {};
+	if (config.dailyCostCapUsd > 0) fields.dailyCostCapUsd = config.dailyCostCapUsd;
+	if (config.globalSpendCapUsd !== null && config.globalSpendCapUsd > 0) fields.globalCostCapUsd = config.globalSpendCapUsd;
+	if (wide !== undefined) {
+		if (wide.totalUsd === null) fields.globalSpendSource = "unavailable";
+		else {
+			fields.globalSpendSource = wide.source;
+			fields.globalSpendUsd = Number((wide.totalUsd + ownCostUsd).toFixed(6));
+		}
+	}
+	return fields;
+}
+
+/** The summary line's global half. Silent when that cap is off, and it says
+ *  `unavailable` rather than a figure when the source could not be read. */
+function capLine(report: TickReport): string {
+	if (report.globalCostCapUsd === null) return "";
+	const account = report.globalSpendUsd === null ? "unavailable" : `$${report.globalSpendUsd.toFixed(6)}`;
+	return ` · global cap $${report.globalCostCapUsd.toFixed(2)}/day · account spent ${account}`;
+}
+
 export async function tick(deps: Deps): Promise<TickReport> {
 	const { port, notifier, config } = deps;
 	const nowMs = deps.now ?? Date.now;
@@ -634,9 +710,19 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
 	const agents = await port.list();
 
-	// The daily cap, checked before the first model call and before the bookkeeping
-	// that would otherwise record a decision nobody paid for. A capped tick is one
-	// `agent list` call, one row, and at most one notification.
+	// Two caps, one precedence rule, checked before the first model call and before the
+	// bookkeeping that would otherwise record a decision nobody paid for. A capped tick
+	// is one `agent list` call, one row, and at most one notification.
+	//
+	//   AGENTFLEET_DAILY_COST_CAP_USD    what *this supervisor* spent on its local day.
+	//   AGENTFLEET_GLOBAL_SPEND_CAP_USD  what *the whole account* spent on the UTC day:
+	//                                    every agent on this machine plus this supervisor
+	//                                    (../metrics/global.ts). Off by default.
+	//
+	// Whichever is lower and enabled wins (`capFired`), because a cap is only ever a
+	// promise that the fleet will not spend past that number, and two promises mean the
+	// smaller one holds. A disabled cap takes no part at all: `0` or `null` is no
+	// enforcement, no read of any log, no notification, and no field on the row.
 	//
 	// `models: []` on the row is how a reader tells that nothing was consulted, and no
 	// `decision` row is written for this tick, because a decision row for a call that
@@ -645,14 +731,45 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// The marks are deliberately left alone: the panes that moved are still undecided,
 	// and saving their movement here would spend the decision on a tick that could not
 	// make it, so the next tick with money left would find nothing to decide.
-	const spend = dailySpend(config.eventsPath, nowMs());
-	if (config.dailyCostCapUsd > 0 && spend.spentUsd >= config.dailyCostCapUsd) {
-		const capReason = `daily spend cap reached: $${spend.spentUsd.toFixed(6)} spent today against a $${config.dailyCostCapUsd.toFixed(2)} cap (AGENTFLEET_DAILY_COST_CAP_USD)`;
+	//
+	// One clock read, so both caps answer for the same instant: a tick that straddled
+	// midnight between two reads would compare two days' spends against one day's cap.
+	const tickNow = nowMs();
+	const spend = dailySpend(config.eventsPath, tickNow);
+	const globalCapUsd = config.globalSpendCapUsd;
+	const globalEnabled = globalCapUsd !== null && globalCapUsd > 0;
+	// Read only when the cap is on: a disabled cap must cost nothing, not merely forbear.
+	const wide = globalEnabled ? globalSpend({ usagePath: config.usageLogPath, eventsPath: config.eventsPath, nowMs: tickNow }) : undefined;
+
+	// The agent log could not be read. Failing open is deliberate: a cap that stops the
+	// fleet because a file moved is a cap that stops work over a filesystem accident, and
+	// this cap is off until the operator asks for it anyway. What must never happen is
+	// that the failure is *quiet* — an absent reading becomes a `0.00` nobody checked,
+	// and the fleet spends its way through a cap that says it is fine. So the row records
+	// `globalSpendSource: "unavailable"` and no `globalSpendUsd` at all, stderr says why
+	// on every tick, and the operator hears it once a day rather than 1,440 times.
+	if (wide !== undefined && wide.totalUsd === null) {
+		console.error(`fleet: WARNING: ${wide.reason}; AGENTFLEET_GLOBAL_SPEND_CAP_USD cannot be enforced this tick, failing open`);
+		if (wide.unavailableTicks === 0) {
+			await notifier.send(`fleet: WARNING: ${wide.reason}. The global spend cap (AGENTFLEET_GLOBAL_SPEND_CAP_USD=${globalCapUsd}) cannot be enforced while that is true; this tick fails open and spends.`, "alert").catch(() => undefined);
+		}
+	}
+
+	const fired = capFired({ fleetCapUsd: config.dailyCostCapUsd, fleetSpendUsd: spend.spentUsd, globalCapUsd, globalSpendUsd: wide?.totalUsd ?? null });
+	if (fired !== undefined) {
+		const supervisorUsd = wide?.supervisorUsd ?? 0;
+		const capReason =
+			fired.scope === "global"
+				? `global spend cap reached: $${fired.spendUsd.toFixed(6)} spent across every agent on UTC day ${wide?.day ?? utcDay(tickNow)} against a $${fired.limitUsd.toFixed(2)} cap (AGENTFLEET_GLOBAL_SPEND_CAP_USD), of which $${supervisorUsd.toFixed(6)} is this supervisor`
+				: `daily spend cap reached: $${fired.spendUsd.toFixed(6)} spent today against a $${fired.limitUsd.toFixed(2)} cap (AGENTFLEET_DAILY_COST_CAP_USD)`;
 		// Once a day, not once a tick: at a 60 s interval the letter of "notify once per
 		// tick" is 1,440 messages saying the same thing by midnight, which is a channel
 		// the operator stops reading exactly when it matters. The first capped row is
-		// the marker, and every later tick of the day is silent.
-		if (!spend.notified) {
+		// the marker, and every later tick of the day is silent. Each cap counts its own
+		// days: the fleet's on the local day it spends in, the global's on the UTC day it
+		// measures, so a UTC rollover inside the operator's evening is not silent.
+		const alreadyTold = fired.scope === "global" ? (wide?.globalCappedTicks ?? 0) > 0 : spend.notified;
+		if (!alreadyTold) {
 			await notifier.send(`fleet: ${capReason}. No model calls until tomorrow; raise the cap to resume sooner.`, "alert").catch(() => undefined);
 		}
 		appendMetric(
@@ -672,9 +789,10 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				models: [],
 				dry: config.dry,
 				capped: true,
+				capScope: fired.scope,
 				capReason,
 				dailyCostUsd: spend.spentUsd,
-				dailyCostCapUsd: config.dailyCostCapUsd,
+				...capFields(config, wide, 0),
 			}),
 		);
 		return {
@@ -690,8 +808,11 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			costUsd: 0,
 			dry: config.dry,
 			capped: true,
+			capScope: fired.scope,
 			dailyCostUsd: spend.spentUsd,
 			dailyCostCapUsd: config.dailyCostCapUsd,
+			globalCostCapUsd: fired.scope === "global" ? fired.limitUsd : (globalEnabled ? globalCapUsd : null),
+			globalSpendUsd: fired.scope === "global" ? fired.spendUsd : (wide?.totalUsd ?? null),
 		};
 	}
 	const claims = readClaims();
@@ -717,7 +838,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const cooldowns = readJson<Record<string, number>>(config.cooldownsPath, {});
 	const built = deps.models ? { ...deps.models, falsifier: deps.models.escalator, degraded: undefined } : buildLadderModels(config);
 	const { primary, escalator, falsifier, degraded } = built;
-	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd };
+	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd, globalCostCapUsd: globalEnabled ? globalCapUsd : null, globalSpendUsd: wide?.totalUsd ?? null };
 	const pending = pendingAsks(readAskLog(config.asksPath));
 
 	if (degraded) await notifier.send(degraded, "alert").catch(() => undefined);
@@ -1032,6 +1153,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// more expensive" is a question about this row and not about the sum of everything
 	// else.
 	report.dailyCostUsd = spend.spentUsd + report.costUsd;
+	report.globalSpendUsd = wide === undefined || wide.totalUsd === null ? null : Number((wide.totalUsd + report.costUsd).toFixed(6));
 	appendMetric(
 		config,
 		makeTick({
@@ -1049,7 +1171,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			models: [...models].sort(),
 			dry: config.dry,
 			dailyCostUsd: Number(report.dailyCostUsd.toFixed(6)),
-			...(config.dailyCostCapUsd > 0 ? { dailyCostCapUsd: config.dailyCostCapUsd } : {}),
+			...capFields(config, wide, report.costUsd),
 		}),
 	);
 	return report;
@@ -1064,7 +1186,7 @@ async function main(): Promise<void> {
 		try {
 			const report = await tick({ port, notifier, config });
 			console.error(
-				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dailyCostCapUsd > 0 ? ` · cap $${report.dailyCostCapUsd.toFixed(2)}/day · spent $${report.dailyCostUsd.toFixed(6)}` : ""}${report.capped ? " · capped" : ""}${report.dry ? " (dry)" : ""}`,
+				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${report.dailyCostCapUsd > 0 ? ` · cap $${report.dailyCostCapUsd.toFixed(2)}/day · spent $${report.dailyCostUsd.toFixed(6)}` : ""}${capLine(report)}${report.capped ? ` · capped${report.capScope === "global" ? " (global)" : report.capScope === "fleet" ? " (fleet)" : ""}` : ""}${report.dry ? " (dry)" : ""}`,
 			);
 		} catch (e) {
 			const message = `fleet tick failed: ${(e as Error).message}`;

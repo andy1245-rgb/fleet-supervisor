@@ -101,6 +101,10 @@ function testConfig(dir: string, dailyCostCapUsd: number): Config {
 		maxPromptsPerTick: 3,
 		nudgeCooldownMin: 10,
 		dailyCostCapUsd,
+		// The global cap is off here on purpose: these tests are about the fleet's own
+		// cap, and the wide one has its own file (./global-cap.test.ts).
+		globalSpendCapUsd: null,
+		usageLogPath: join(dir, "usage.jsonl"),
 		inspector: "off",
 		maxInspectionsPerTick: 0,
 		ask: "never",

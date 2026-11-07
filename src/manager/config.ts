@@ -34,6 +34,12 @@
 // still permits 4,320 prompts a day by construction; a dollar ceiling is what makes
 // that a number and not an unbounded one. It is checked in ./tick.ts before the
 // first model call.
+//
+// `globalSpendCapUsd` is the second one, wider: it bounds the *whole account's* day
+// (every agent on this machine plus this supervisor, see ../metrics/global.ts) rather
+// than only what the supervisor spent. Two caps, one rule — whichever is lower and
+// enabled wins — stated where the check runs, in ./tick.ts. It is **off until the
+// operator sets it**; the fleet's own cap is separate and stays at 0.50.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -70,6 +76,16 @@ export function normalizeEffort(value: unknown): ReasoningEffort {
  *  environment variable when he wants the fleet to spend more (see README). */
 export const DEFAULT_DAILY_COST_CAP_USD = 0.5;
 
+/** The account's day, in dollars, or `null` for "not enforced".
+ *
+ *  `null` and not `0`, because this cap is a different question from the fleet's: it
+ *  measures spend the supervisor does not control, so it must not arrive switched on
+ *  for an operator who never asked for it. The operator has budget and does not want
+ *  it biting today; the mechanism exists, is tested, and is off. Set it —
+ *  `AGENTFLEET_GLOBAL_SPEND_CAP_USD=20` — and the tick stops calling models when the
+ *  account's UTC day reaches that number. */
+export const DEFAULT_GLOBAL_SPEND_CAP_USD: number | null = null;
+
 /** Dollars, or a rejection.
  *
  *  Every other limit in this file falls back to its default on nonsense, because a
@@ -89,6 +105,28 @@ export function parseDailyCostCap(value: string | undefined): number {
 	const n = Number(text);
 	if (!Number.isFinite(n)) {
 		throw new Error(`AGENTFLEET_DAILY_COST_CAP_USD is not a finite number: got "${value}"`);
+	}
+	return n;
+}
+
+/** Dollars, or `null` for off, or a rejection.
+ *
+ *  Same grammar and the same refusal to fall back as `parseDailyCostCap`: an operator
+ *  who sets `AGENTFLEET_GLOBAL_SPEND_CAP_USD=twenty` and gets a silently disabled cap
+ *  believes he is covered when he is not. Unset and `""` mean `null` — off — because
+ *  that is the documented default, and `"0"` means the same thing on purpose: `0`
+ *  dollars is not a cap any fleet can tick under. */
+export function parseGlobalSpendCap(value: string | undefined): number | null {
+	if (value === undefined || value.trim() === "") return DEFAULT_GLOBAL_SPEND_CAP_USD;
+	const text = value.trim();
+	if (!/^(\d+(\.\d*)?|\.\d+)$/.test(text)) {
+		throw new Error(
+			`AGENTFLEET_GLOBAL_SPEND_CAP_USD must be a non-negative dollar amount such as "20"; leave it unset (or 0) to disable the cap. Got "${value}"`,
+		);
+	}
+	const n = Number(text);
+	if (!Number.isFinite(n)) {
+		throw new Error(`AGENTFLEET_GLOBAL_SPEND_CAP_USD is not a finite number: got "${value}"`);
 	}
 	return n;
 }
@@ -136,6 +174,13 @@ export interface Config {
 	 *  The only limit here that is not per-tick: a tick that finds the day at or over
 	 *  this makes no model call at all (see `tick.ts`). */
 	dailyCostCapUsd: number;
+	/** Hard ceiling on one **UTC** day's spend across every agent on this machine plus
+	 *  the supervisor, in dollars. `null` or `0` disables it, and it is `null` by
+	 *  default. When both caps are enabled the lower one is the one that fires. */
+	globalSpendCapUsd: number | null;
+	/** The per-call agent usage log the global cap reads. Local disk only: another
+	 *  machine's spend is not in this file and no local file could hold it. */
+	usageLogPath: string;
 	/** How cross-agent triggers are investigated: off, cheap or deep. */
 	inspector: InspectorMode;
 	/** Findings per tick. A trigger storm is inspected worst-first, not in full. */
@@ -213,6 +258,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		maxPromptsPerTick: num(env.AGENTFLEET_MAX_PROMPTS, 3),
 		nudgeCooldownMin: num(env.AGENTFLEET_COOLDOWN_MIN, 10),
 		dailyCostCapUsd: parseDailyCostCap(env.AGENTFLEET_DAILY_COST_CAP_USD),
+		globalSpendCapUsd: parseGlobalSpendCap(env.AGENTFLEET_GLOBAL_SPEND_CAP_USD),
+		usageLogPath: env.AGENTFLEET_USAGE_LOG || join(homedir(), ".pi", "agent", "usage.jsonl"),
 		inspector: normalizeInspectorMode(env.AGENTFLEET_INSPECTOR),
 		maxInspectionsPerTick: num(env.AGENTFLEET_MAX_INSPECTIONS, 2),
 		ask: normalizePolicy(env.AGENTFLEET_ASK),

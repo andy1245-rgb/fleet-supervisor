@@ -726,6 +726,8 @@ function tickConfig(dir: string, overrides: Partial<Config> = {}): Config {
 		maxPromptsPerTick: 3,
 		nudgeCooldownMin: 10,
 		dailyCostCapUsd: 0,
+		globalSpendCapUsd: null,
+		usageLogPath: join(dir, "usage.jsonl"),
 		inspector: "off",
 		maxInspectionsPerTick: 0,
 		ask: "fork",
