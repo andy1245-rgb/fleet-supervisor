@@ -735,6 +735,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// One clock read, so both caps answer for the same instant: a tick that straddled
 	// midnight between two reads would compare two days' spends against one day's cap.
 	const tickNow = nowMs();
+	// The rows below are stamped with the tick's own clock, not the wall clock. Both caps
+	// attribute a row to the day in the row's `ts`, and both read their once-a-day marker
+	// back out of that same fold: a row stamped by a second clock can land in another
+	// day's bucket, so the marker would never be found and every tick of the day would
+	// notify again — the 1,440-messages failure the marker exists to prevent.
+	const tickStamp = new Date(tickNow).toISOString();
 	const spend = dailySpend(config.eventsPath, tickNow);
 	const globalCapUsd = config.globalSpendCapUsd;
 	const globalEnabled = globalCapUsd !== null && globalCapUsd > 0;
@@ -791,6 +797,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				capped: true,
 				capScope: fired.scope,
 				capReason,
+				ts: tickStamp,
 				dailyCostUsd: spend.spentUsd,
 				...capFields(config, wide, 0),
 			}),
@@ -1170,6 +1177,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			durationMs: elapsed(tickStartedAt),
 			models: [...models].sort(),
 			dry: config.dry,
+			ts: tickStamp,
 			dailyCostUsd: Number(report.dailyCostUsd.toFixed(6)),
 			...capFields(config, wide, report.costUsd),
 		}),
