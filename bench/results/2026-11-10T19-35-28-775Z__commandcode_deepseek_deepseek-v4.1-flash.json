@@ -1,0 +1,102 @@
+{
+	"recordedAt": "2026-11-10T19:35:28.775Z",
+	"model": "commandcode:deepseek/deepseek-v4.1-flash",
+	"taskSetSha": "8b37d54869c5a99a",
+	"taskSetPath": "bench/tasks/2026-11-10.8b37d54869c5a99a.jsonl",
+	"n": 100,
+	"ops": {
+		"exactMatch": 0.3,
+		"perOpRecall": {
+			"leave": 0.0893,
+			"nudge": 0.5682
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 0.99,
+			"0.5": 0.99,
+			"0.7": 0.31,
+			"0.9": 0.02
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0.303,
+			"0.5": 0.303,
+			"0.7": 0.3226,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"matrix": {
+			"leave": {
+				"leave": 0,
+				"nudge": 5,
+				"declare_done": 4,
+				"flag": 2
+			},
+			"nudge": {
+				"leave": 6,
+				"nudge": 0,
+				"declare_done": 4,
+				"flag": 1
+			},
+			"declare_done": {
+				"leave": 5,
+				"nudge": 5,
+				"declare_done": 0,
+				"flag": 2
+			},
+			"flag": {
+				"leave": 6,
+				"nudge": 1,
+				"declare_done": 1,
+				"flag": 0
+			}
+		},
+		"total": 310,
+		"perTask": 3.1,
+		"weightsSwept": false
+	},
+	"usableOutputRate": 0.99,
+	"accuracyGivenUsable": {
+		"value": 0.303,
+		"n": 99
+	},
+	"baselines": {
+		"alwaysLeave": {
+			"exactMatch": 0.56,
+			"regretPerTask": 2.64
+		},
+		"alwaysNudge": {
+			"exactMatch": 0.44,
+			"regretPerTask": 2.8
+		},
+		"alwaysDeclareDone": {
+			"exactMatch": 0,
+			"regretPerTask": 4
+		},
+		"alwaysFlag": {
+			"exactMatch": 0,
+			"regretPerTask": 1.56
+		}
+	},
+	"latencyMs": {
+		"p50": 4942,
+		"p95": 14690
+	},
+	"costUsd": {
+		"total": 0.026772,
+		"per1k": 0.2677
+	},
+	"refusals": 1,
+	"coverage": {
+		"sampledPerOp": {
+			"leave": 56,
+			"nudge": 44
+		},
+		"corpusPerOp": {
+			"leave": 721,
+			"nudge": 555
+		}
+	},
+	"notes": "cli"
+}
