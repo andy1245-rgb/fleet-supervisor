@@ -122,8 +122,19 @@ test("every label has a stated reason that is not a fallback", () => {
 test("the vocabulary has no new_task and no unmapped label", () => {
 	assert.equal(isLabel("new_task"), false);
 	assert.equal(isLabel("nudge"), false);
-	assert.deepEqual(Object.keys(LABEL_TO_OP).sort(), ["continue", "instruction", "question", "redirect", "stop"]);
+	// `quiet` is the time-sampled miner's label for a window with no human message.
+	// It is in the vocabulary because label → op has one definition and the op it
+	// maps to (`leave`) is the one the supervisor most needs; it is not something a
+	// message-bounded read of a transcript can produce.
+	assert.equal(isLabel("leave"), false);
+	assert.deepEqual(Object.keys(LABEL_TO_OP).sort(), ["continue", "instruction", "question", "quiet", "redirect", "stop"]);
 	for (const op of Object.values(LABEL_TO_OP)) {
 		assert.ok(["leave", "nudge", "declare_done", "flag"].includes(op), op);
+	}
+});
+
+test("labelFor never returns quiet: an absence is not text", () => {
+	for (const text of ["cancel", "ok", "why is the build red", "make sure we dont push", ".", "thank you"]) {
+		assert.notEqual(labelFor(text)?.label, "quiet", text);
 	}
 });

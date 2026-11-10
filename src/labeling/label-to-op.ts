@@ -72,7 +72,18 @@
 
 import type { Op } from "../decision/types.ts";
 
-export type Label = "continue" | "instruction" | "redirect" | "question" | "stop";
+//   quiet        → leave   no human message inside the decision window. This is the
+//                          one label a message-bounded miner cannot produce, because
+//                          its evidence is an absence rather than a message: it is
+//                          emitted only by the time-sampled miner
+//                          (mine/time-sampled-points.ts), which samples every turn end
+//                          whether or not a human answered it. It sits beside `stop`
+//                          as the second honest route to `leave`, and it is what makes
+//                          the op the supervisor should most often choose learnable at
+//                          all. Its confidence is the window's, not the model's — see
+//                          that miner's header.
+
+export type Label = "continue" | "instruction" | "redirect" | "question" | "stop" | "quiet";
 
 export const LABEL_TO_OP: Readonly<Record<Label, Op>> = {
 	continue: "nudge",
@@ -80,6 +91,7 @@ export const LABEL_TO_OP: Readonly<Record<Label, Op>> = {
 	redirect: "nudge",
 	question: "nudge",
 	stop: "leave",
+	quiet: "leave",
 };
 
 export function isLabel(value: unknown): value is Label {
