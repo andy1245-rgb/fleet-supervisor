@@ -161,11 +161,39 @@ function cutPrefix(value: string, cap: number): string {
 	return last >= 0xd800 && last <= 0xdbff ? head.slice(0, -1) : head;
 }
 
-/** The terminal tail: the agent's own output, plus any mined tool calls. */
+/** The full tail before truncation: the agent's output plus any mined tool calls. */
+function joinedTail(point: Point): string {
+	return [point.assistantText, point.toolCalls].filter((line) => line.length > 0).join("\n") || "(empty)";
+}
+
+/** The part of the tail that survives truncation, without the marker.
+ *
+ *  Truncation keeps the END, matching `clipTail` in `src/decision/prompt.ts`.
+ *  It used to keep the first characters, which meant a row trained on the
+ *  opening lines of a run while the sidecar served the closing ones — the model
+ *  was fitted for a prompt it would never be asked. The join order puts the
+ *  mined tool calls last, so they survive the cut.
+ *
+ *  Kept separate from `renderTail` because the TARGET argument must be drawn
+ *  from the same characters the prompt kept. Deriving it from the untruncated
+ *  text put the argument outside the query on every `leave` row, which trains
+ *  the model to refuse: the engine suppresses a non-span argument and reports it
+ *  as a refusal. */
+function keptTail(point: Point, cap: number): string {
+	const joined = joinedTail(point);
+	if (joined.length <= cap) return joined;
+	const kept = joined.slice(joined.length - cap);
+	// A cut between the halves of a surrogate pair leaves a lone surrogate, which
+	// the engine's tokenizer refuses to encode — the row would be unreadable, not
+	// just truncated.
+	const first = kept.charCodeAt(0);
+	return first >= 0xdc00 && first <= 0xdfff ? kept.slice(1) : kept;
+}
+
 function renderTail(point: Point, cap: number): string {
-	const lines = [point.assistantText, point.toolCalls].filter((line) => line.length > 0);
-	const joined = lines.join("\n") || "(empty)";
-	return joined.length <= cap ? joined : `${cutPrefix(joined, cap)}…`;
+	const joined = joinedTail(point);
+	const kept = keptTail(point, cap);
+	return kept === joined ? joined : `[...truncated ${joined.length - kept.length} chars...]\n${kept}`;
 }
 
 /** Characters the state block spends before the instruction and the tail. */
@@ -204,9 +232,9 @@ function firstSentence(value: string, cap: number): string {
  *  gate rejects a value the input never states, and examples like these are what
  *  teach the model to keep its arguments inside the evidence. Both caps are the
  *  caps the state block renders with, so the argument is always a span of it. */
-function argumentFor(point: Point, humanCap: number, tailCap: number):
+function argumentFor(point: Point, humanCap: number, tailText: string):
 	{ argument: string; span: string } | undefined {
-	const tail = firstSentence(point.assistantText, tailCap);
+	const tail = firstSentence(tailText, ARGUMENT_CHARS);
 	const goal = firstSentence(point.humanText, humanCap);
 	const pick = (candidates: readonly string[]): { argument: string; span: string } | undefined => {
 		for (const candidate of candidates) {
@@ -232,7 +260,8 @@ interface Built {
 	size: number;
 }
 
-function toExample(point: Point, tools: unknown, args: Args): Built | { dropped: "noArgument" | "tooLong" } {
+function toExample(point: Point, tools: unknown, args: Args):
+	Built | { dropped: "noArgument" | "tooLong" | "noSpan" } {
 	const toolsChars = JSON.stringify(tools).length;
 	// Budget with the target's worst case first, so the caps the argument is cut
 	// to are the caps the state block is rendered with.
@@ -246,8 +275,9 @@ function toExample(point: Point, tools: unknown, args: Args): Built | { dropped:
 		humanCap = Math.max(40, variable - 60);
 		tailCap = variable - humanCap;
 	}
+	// Derived from the text the prompt will actually carry, not from the raw field.
 	const derived = argumentFor(point, Math.min(ARGUMENT_CHARS, humanCap),
-		Math.min(ARGUMENT_CHARS, tailCap));
+		keptTail(point, tailCap));
 	if (!derived) return { dropped: "noArgument" };
 	const span = derived.span.length > 60 ? `${derived.span.slice(0, 60).trimEnd()}…` : derived.span;
 	const argumentName = ARGUMENT_NAME[point.op];
@@ -275,6 +305,10 @@ function toExample(point: Point, tools: unknown, args: Args): Built | { dropped:
 		overflow = overflowOf(rendered);
 	}
 	if (overflow > 0) return { dropped: "tooLong" };
+	// The engine suppresses an argument that is not a span of the query and reports
+	// the suppression as a refusal, so a row whose target fell outside the kept text
+	// teaches "refuse here". Drop it instead.
+	if (!rendered.includes(derived.argument)) return { dropped: "noSpan" };
 	const trimmed = point.assistantText.length + point.toolCalls.length > tailCap ||
 		point.humanText.length > humanCap || calls !== point.toolCalls;
 	return {
@@ -328,7 +362,7 @@ function main(argv: readonly string[]): void {
 	// Derived from the canonical map so a vocabulary change in label-to-op.ts
 	// cannot leave a stale literal here.
 	const perLabel = Object.fromEntries(Object.keys(LABEL_TO_OP).map((l) => [l, 0])) as Record<Label, number>;
-	const counts = { unreadable: 0, duplicate: 0, noArgument: 0, tooLong: 0, trimmed: 0 };
+	const counts = { unreadable: 0, duplicate: 0, noArgument: 0, noSpan: 0, tooLong: 0, trimmed: 0 };
 	let longestExample = 0;
 	for (const line of lines) {
 		if (args.limit > 0 && examples.length >= args.limit) break;
