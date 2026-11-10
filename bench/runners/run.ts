@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { commandcodeModel } from "../../src/decision/adapters/commandcode.ts";
 import { needleModel } from "../../src/decision/needle.ts";
 import { openRouterModel } from "../../src/decision/openrouter.ts";
 import type { Decision, DecisionInput, DecisionModel, Op } from "../../src/decision/types.ts";
@@ -477,6 +478,13 @@ export function tracesToJsonl(traces: readonly TaskTrace[]): string {
 
 function buildModel(name: string, timeoutMs?: number): DecisionModel {
 	if (name === "needle3" || name === "needle") return needleModel(timeoutMs ? { timeoutMs } : {});
+	// The same mapping the supervisor uses (`manager/tick.ts:buildModel`), so a bench
+	// record can name the model the fleet actually runs. Without this branch a
+	// `commandcode/...` name silently fell through to the chat-completions adapter,
+	// which is a different wire and a different question.
+	if (name.startsWith("commandcode/")) {
+		return commandcodeModel({ model: name.slice("commandcode/".length), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+	}
 	const model = name.startsWith("openrouter:") ? name.slice("openrouter:".length) : name;
 	return openRouterModel({ model });
 }
