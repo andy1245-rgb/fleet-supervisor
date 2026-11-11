@@ -11,8 +11,12 @@ node bench/runners/run.ts needle3 --limit=4 --timeout-ms=600000 \
   --taskset=bench/tasks/2026-10-26.b9765d1a55e18b4e.jsonl
 ```
 
-Wall clock **3 m 22.8 s** (202.8 s), exit 0. Records written:
-`bench/results/2026-11-10T10-12-52-421Z__needle3.json` and its `.traces.jsonl`.
+Wall clock **3 m 22.8 s** (202.8 s), exit 0. Record written:
+`bench/results/2026-11-10T10-12-52-421Z__needle3.json`. Its `.traces.jsonl` sidecar stayed on disk
+and is **not** committed — a trace carries the engine's own words, which for this engine are a
+paraphrase of the pane it was shown (`docs/CORPUS-POLICY.md`). The record keeps every score and
+cites the task-set sha, which is what a reader needs to re-score with the corpus supplied out of
+band.
 
 One deviation from the handoff's command, deliberate: `--taskset` names the **frozen 502-row
 snapshot** rather than the working `bench/tasks/tasks.jsonl`. The working file is now `89e3ec2d…`
@@ -33,12 +37,16 @@ threshold from 0.3 to 0.9, and `exactMatch` 0.25 — which is exactly the always
 score on this subset, so the single "correct" row is a refusal coerced to `flag`, not a decision.
 The always-nudge constant scores 0.5 here.
 
-| row | expected | latency | `suppressed` | confidence | what the engine said |
+| row | expected | latency | `suppressed` | confidence | what the engine did |
 |---|---|---|---|---|---|
-| `dp-0164-01a15f32` | `flag` | 37,935 ms | 0 | 0.4700 | *"No tool available for creating or managing a project."* |
-| `dp-0368-01a14237` | `nudge` | 58,568 ms | 2 | 0.0026 | *"…two separate calls."* |
-| `dp-0375-01a1426a` | `nudge` | 43,041 ms | 1 | 0.0049 | *"…two calls to nudge."* |
-| `dp-0483-01a14da7` | `leave` | 52,264 ms | 1 | 0.0027 | (reasoning cut mid-sentence by the token cap) |
+| `dp-0164-01a15f32` | `flag` | 37,935 ms | 0 | 0.4700 | emitted no call; its reasoning was a task-framing sentence |
+| `dp-0368-01a14237` | `nudge` | 58,568 ms | 2 | 0.0026 | proposed two calls, both withheld with a reasoned split |
+| `dp-0375-01a1426a` | `nudge` | 43,041 ms | 1 | 0.0049 | proposed one call, withheld |
+| `dp-0483-01a14da7` | `leave` | 52,264 ms | 1 | 0.0027 | proposed one call, withheld; reasoning cut mid-sentence by the token cap |
+
+The `what the engine did` column describes the shape of each answer on purpose. The reasoning text
+itself is a paraphrase of the pane it was shown, so it lives in the trace on disk and not in this
+repository — see `docs/CORPUS-POLICY.md`, and note that the traces from this run are not committed.
 
 p50 43,041 ms, p95 58,568 ms against a **600,000 ms** cap. The cap was never approached: the
 slowest row used 9.8 % of it.
@@ -47,9 +55,9 @@ Given time, the engine does not produce an op — but **it is not silent**, and 
 the finding. On three of four rows the model *did* emit calls; `suppressed` 1, 1 and 2 are the
 grounding gate withholding them, and the refusal is the gate's report of that withholding, not a
 decode that produced nothing. On the fourth (`suppressed` 0, confidence 0.4700 — an order of
-magnitude above the others) the model never called a tool at all, and said why: it does not
-believe "create a project" maps onto `leave` / `nudge` / `declare_done` / `flag`. That is the
-task-framing prior, and no amount of time changes it.
+magnitude above the others) the model never called a tool at all, and its reasoning was the
+task-framing argument: it does not believe the task this pane was on maps onto `leave` / `nudge` /
+`declare_done` / `flag`. That is the task-framing prior, and no amount of time changes it.
 
 So the answer is **no, and not for the reason time would fix.** The four ops are unreachable for
 this engine, but the binding constraints are the grounding gate over a proposed span and a
