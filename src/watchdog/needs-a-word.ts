@@ -23,7 +23,7 @@
 // rather than large and cheap — see `bench/runners/stage0.ts` and
 // `docs/stage0-residue-2026-11-10.md`.
 
-import { classify, findingFields, RULES, type CommandSample, type FindingFields, type Rule, type Verdict } from "./rules.ts";
+import { classify, findingFields, formatAge, RULES, type CommandSample, type FindingFields, type Rule, type Verdict } from "./rules.ts";
 
 /** What a pane is, from the supervisor's own snapshot. Only the fields this stage
  *  reads: it is not a `HerdrAgent`, and a caller should not have to build one. */
@@ -44,10 +44,69 @@ export interface WordVerdict {
 	why: string;
 	/** The finding that would be reported, present exactly when `speak` is true. */
 	finding?: FindingFields;
+	/** What to do about it, present exactly when `speak` is true. */
+	action?: WordAction;
 	/** True when the deciding process was past its allowance but the second sample
 	 *  showed CPU progress. Only ever set on a silent verdict, and it is the one
 	 *  silence a reader should be able to tell from "nothing was running". */
 	working?: boolean;
+}
+
+/** There is exactly one action for a flagged command, and it contains no terminate.
+ *
+ *  The operator's rule, and it is absolute: **the watchdog never stops, kills or
+ *  signals anything.** Not "prefers not to", not "only when it looks hung" — the
+ *  subject of a finding keeps running, whatever the rule says and whatever a model
+ *  proposes. So a flagged command gets exactly three things:
+ *
+ *    1. the owning agent is prompted, and told in as many words that the final
+ *       decision about the process is its own;
+ *    2. the operator is notified of the same facts;
+ *    3. the command carries on in the background, untouched.
+ *
+ *  `signal` is the literal `"none"` rather than a boolean or an option, because this
+ *  is the contract that must not acquire a switch. There is no code path behind it
+ *  to switch on: `src/watchdog/` imports no `child_process` and calls no signal, the
+ *  `HerdrPort` has no `stop`/`close`/`kill` member (`src/herdr/types.ts`), and the op
+ *  vocabulary has no stop op for a model to propose. `test/no-terminate.test.ts`
+ *  pins all three absences, because an absence nobody tests is a default waiting to
+ *  be filled in. */
+export interface WordAction {
+	readonly kind: "prompt-agent-and-notify";
+	/** Exactly what is sent to the owning agent. */
+	readonly prompt: string;
+	/** Exactly what is sent to the operator. */
+	readonly notify: string;
+	/** There is nothing to send to the process, because there is no way to send it. */
+	readonly signal: "none";
+	/** The command keeps running. A literal for the same reason. */
+	readonly leavesRunning: true;
+}
+
+/** The action for one finding. Pure, so the only sentence the supervisor ever sends
+ *  about a flagged command is written down in one place and can be read without
+ *  running anything. */
+export function wordActionFor(target: WatchTarget, rule: string, why: string, finding: FindingFields): WordAction {
+	const command = finding.command.trim() || "a command";
+	const age = formatAge(finding.ageMs);
+	const prompt = [
+		`Watchdog: \`${command}\` (pid ${finding.pid}) has been running ${age}, past the allowance for its class of command.`,
+		"",
+		`Why that is worth a look: ${why}`,
+		"",
+		"Nothing has been signalled and nothing will be: this process is yours to decide about. Leave it if it is working, and if it is not, change what you are doing about it. The final decision is yours.",
+	].join("\n");
+	const notify = `${target.paneId}: \`${command}\` (pid ${finding.pid}) has run ${age} past its allowance (${rule}). Its agent has been asked to decide and has been told the decision is its own. The command is still running — nothing was stopped.`;
+	return { kind: "prompt-agent-and-notify", prompt, notify, signal: "none", leavesRunning: true };
+}
+
+/** Which pane a process belongs to, by the same attribution `needsAWord` uses: the
+ *  pane working where the process works. `undefined` when no pane claims it, which
+ *  is the honest answer for a daemon and means the finding goes to the operator
+ *  rather than to an agent. */
+export function ownerOf(sample: CommandSample, targets: readonly WatchTarget[]): WatchTarget | undefined {
+	if (!sample.cwd) return undefined;
+	return targets.find((target) => target.cwd === sample.cwd);
 }
 
 /** No rule matched any process of this pane. Distinct from a rule that permits
@@ -107,7 +166,13 @@ export function needsAWord(
 			decided ??= { sample, verdict };
 			continue;
 		}
-		return { speak: true, rule: verdict.rule, why: verdict.why, finding: findingFields(sample, verdict) };
+		return {
+			speak: true,
+			rule: verdict.rule,
+			why: verdict.why,
+			finding: findingFields(sample, verdict),
+			action: wordActionFor(target, verdict.rule, verdict.why, findingFields(sample, verdict)),
+		};
 	}
 	if (decided) {
 		return {

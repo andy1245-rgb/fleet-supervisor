@@ -30,8 +30,8 @@ import { piModel, PI_TIMEOUT_MS } from "../decision/pi.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../decision/types.ts";
 import { defaultNotifier, type Level, type Notifier } from "../notify/telegram.ts";
 import { scanTriggers, type ClaimHistory, type Trigger } from "./triggers.ts";
-import { scan as watchdogScan, formatAge, findingFields, sampleProcesses } from "../watchdog/rules.ts";
-import { needsAWord, stage0Fields } from "../watchdog/needs-a-word.ts";
+import { scan as watchdogScan, findingFields, sampleProcesses } from "../watchdog/rules.ts";
+import { needsAWord, ownerOf, stage0Fields, wordActionFor } from "../watchdog/needs-a-word.ts";
 import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
 import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
@@ -1014,6 +1014,10 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// makes them a fine alarm and a poor gate.
 	report.stage0Panes = agents.length;
 	const speaking = new Set<string>();
+	// Every pane as stage 0 sees it: the attributes it needs and nothing else. Built
+	// once because three places ask the same question — the verdicts, and the owner
+	// lookup for a watchdog finding.
+	const targets = agents.map((agent) => ({ paneId: agent.paneId, cwd: agent.foregroundCwd || agent.cwd }));
 	if (observe) {
 		let samples: ReturnType<typeof sampleProcesses> = [];
 		try {
@@ -1022,13 +1026,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			// A /proc read that fails costs the verdict, not the tick.
 			appendEvent(config, { kind: "stage0_error", error: (e as Error).message });
 		}
-		for (const agent of agents) {
-			const target = { paneId: agent.paneId, cwd: agent.foregroundCwd || agent.cwd };
+		for (const target of targets) {
 			const verdict = needsAWord(target, samples);
 			appendMetric(config, makeStage0(stage0Fields(target, verdict)));
 			if (verdict.speak) {
 				report.stage0Spoke += 1;
-				speaking.add(agent.paneId);
+				speaking.add(target.paneId);
 			}
 		}
 	}
@@ -1348,7 +1351,69 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				// schema names, so the legacy line gains `schema` and `stalled` rather
 				// than being duplicated beside a structured copy of itself.
 				appendMetric(config, makeWatchdog(findingFields(sample, verdict)));
-				await notifier.send(`[${verdict.rule}] pid ${sample.pid} running ${formatAge(sample.elapsedMs)}\n${verdict.why}\n${sample.command.slice(0, 160)}`, "action").catch(() => undefined);
+
+				// The action contract, in one place (`watchdog/needs-a-word.ts`): prompt the
+				// agent that owns the command and tell it the decision is its own, notify the
+				// operator, and leave the command running. There is no terminate branch to
+				// write here because there is no way to write one — `port` has no stop member
+				// and nothing below signals `sample.pid`.
+				const owner = ownerOf(sample, targets);
+				const target = owner ?? { paneId: `pid:${sample.pid}`, cwd: sample.cwd ?? "" };
+				const action = wordActionFor(target, verdict.rule, verdict.why, findingFields(sample, verdict));
+				await notifier.send(action.notify, "action").catch(() => undefined);
+				appendEvent(config, { kind: "watchdog_action", paneId: target.paneId, rule: verdict.rule, pid: sample.pid, signal: action.signal, wouldPrompt: owner !== undefined });
+				if (!owner) continue;
+
+				// The prompt is a nudge like any other, so it goes through the same gate, the
+				// same per-pane cooldown and the same per-tick cap. A watchdog that could
+				// bypass the limits every other action obeys would be a second supervisor.
+				if (cooldowns[owner.paneId] !== undefined && nowMs() - (cooldowns[owner.paneId] ?? 0) < config.nudgeCooldownMin * 60_000) {
+					appendEvent(config, { kind: "watchdog_prompt_skipped", paneId: owner.paneId, reason: "cooldown" });
+					continue;
+				}
+				if (report.promptsSent >= config.maxPromptsPerTick) {
+					appendEvent(config, { kind: "watchdog_prompt_skipped", paneId: owner.paneId, reason: "capped" });
+					continue;
+				}
+				const watchdogDecision: Decision = {
+					op: "nudge",
+					argument: action.prompt,
+					confidence: 1,
+					model: "watchdog",
+					costUsd: 0,
+					latencyMs: 0,
+					refused: false,
+					raw: JSON.stringify({ source: "watchdog", rule: verdict.rule }),
+				};
+				const gate = await askGate({
+					config,
+					notifier,
+					decision: watchdogDecision,
+					trail: [watchdogDecision],
+					triggers,
+					paneId: owner.paneId,
+					group: groupOf(agents.find((agent) => agent.paneId === owner.paneId) ?? agents[0]!, claims.get(owner.paneId)),
+					cwd: owner.cwd,
+					promptsSent: report.promptsSent,
+					pending,
+					nowMs: nowMs(),
+				});
+				if (gate.held) {
+					appendEvent(config, { kind: "watchdog_prompt_held", paneId: owner.paneId, rule: verdict.rule, why: gate.why });
+					continue;
+				}
+				if (suppressed) {
+					appendEvent(config, { kind: observe ? "watchdog_prompt_observed" : "watchdog_prompt_dry", paneId: owner.paneId, text: action.prompt, rule: verdict.rule });
+					continue;
+				}
+				const sent = await port.prompt(owner.paneId, action.prompt);
+				if (sent.disposition === "rejected") {
+					appendEvent(config, { kind: "watchdog_prompt_rejected", paneId: owner.paneId, reason: sent.reason ?? "unknown" });
+					continue;
+				}
+				report.promptsSent += 1;
+				cooldowns[owner.paneId] = nowMs();
+				appendEvent(config, { kind: "watchdog_prompted", paneId: owner.paneId, rule: verdict.rule, pid: sample.pid, text: action.prompt });
 			}
 		} catch (e) {
 			appendEvent(config, { kind: "watchdog_error", error: (e as Error).message });

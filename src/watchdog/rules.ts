@@ -8,6 +8,15 @@
 // legitimately take. Every rule carries the reason it exists because the reason
 // is what gets shown to the human.
 //
+// THE WATCHDOG NEVER STOPS, KILLS OR SIGNALS ANYTHING. A rule decides *whether to
+// speak*, never whether to terminate: a flagged command keeps running, and the
+// action is to prompt the agent that owns it (telling it the decision is its own),
+// notify the operator, and leave the process alone. That is the whole contract and
+// it is why this module reads /proc and prints — there is no capability here to
+// stop anything, and `test/no-terminate.test.ts` fails if one is added. The port the
+// supervisor acts through has no stop member either (`../herdr/types.ts`), so the
+// rule is structural rather than a habit.
+//
 // Run standalone: `node src/watchdog/rules.ts [--stalled]`.
 
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
@@ -106,6 +115,12 @@ export const RULES: readonly Rule[] = [
 		match: () => true,
 	},
 ];
+
+/** What a fired rule licenses. It licenses a *sentence*, never a signal: the age
+ *  allowance says when a command has been running long enough to be worth talking
+ *  about, and the watchdog's action contract (`./needs-a-word.ts`) turns that into
+ *  an agent prompt plus an operator notification while the process keeps running. */
+export const RULE_LICENSES = "one sentence to the agent and one to the operator; the process is left running" as const;
 
 export interface Verdict {
 	flagged: boolean;
