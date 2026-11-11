@@ -340,6 +340,7 @@ function liveConfig(dir: string): Config {
 		intervalMs: 60_000,
 		once: true,
 		dry: false,
+		observe: false,
 		primary: "fake:primary",
 		escalator: "fake:escalator",
 		threshold: 0.7,

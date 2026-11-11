@@ -71,6 +71,7 @@ function config(dir: string): Config {
 		// Not dry: `saveMarks` only runs in a real tick, and that is the write the broken
 		// notification must not cost.
 		dry: false,
+		observe: false,
 		primary: "commandcode/deepseek/deepseek-v4.1-flash",
 		escalator: "z-ai/glm-5.3-flash",
 		threshold: 0.7,

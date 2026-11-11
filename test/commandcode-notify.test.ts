@@ -59,6 +59,7 @@ function config(dir: string): Config {
 		// Not dry: `saveMarks` only runs in a real tick, and that is the write this test
 		// is about.
 		dry: false,
+		observe: false,
 		primary: "fake:primary",
 		escalator: "fake:escalator",
 		threshold: 0.7,

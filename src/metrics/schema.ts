@@ -50,7 +50,7 @@ export type DecisionReasoning = (typeof EFFORTS)[number];
 
 /** What happened to a would-be action. `held` is the gate parking it in
  *  asks.jsonl; `dry` is a rehearsal that touched nothing. */
-export type ActionDisposition = "sent" | "held" | "rejected" | "skipped" | "dry";
+export type ActionDisposition = "sent" | "held" | "rejected" | "skipped" | "dry" | "observed";
 
 /** A claim's state as the metric layer sees it: the worker's three states plus
  *  `none`, for a pane that moved with no claim file on disk. */
@@ -99,6 +99,9 @@ const DISPOSITIONS: Readonly<Record<ActionDisposition, true>> = {
 	rejected: true,
 	skipped: true,
 	dry: true,
+	/** Observe mode: the action was decided, priced and recorded, and deliberately
+	 *  not performed. Distinct from `dry`, which leaves no trace to join later. */
+	observed: true,
 };
 
 const MODES: Readonly<Record<InspectionMode, true>> = { cheap: true, deep: true };
@@ -218,6 +221,12 @@ export interface TickEvent extends Base {
 	/** Every model consulted this tick, including a failed escalator's target. */
 	models: string[];
 	dry: boolean;
+	/** True when this tick ran the observe pipeline: every stage-0 verdict and every
+	 *  model proposal is in the log and nothing was sent. A separate flag from `dry`
+	 *  because the two leave the log in different states — a dry tick records no
+	 *  pending decision and judges nothing, so there is nothing to join to what
+	 *  happened next, while an observe tick records both. */
+	observe?: boolean;
 	/** Legacy alias of `held`: the existing `tick` line calls it `asks`. */
 	asks?: number;
 	/** True when the daily spend cap skipped every model call this tick. `models`
@@ -367,6 +376,32 @@ export interface OutcomeEvent extends Base {
 	title: string;
 }
 
+/** One stage-0 verdict for one pane: did the cheap question say this pane needs a
+ *  word, and if it did not, which rule permitted the silence. Written for every
+ *  pane on an observe tick, so "we said nothing" is auditable rather than the
+ *  absence of a row — a log that only records speech cannot tell a silent
+ *  supervisor from a broken one. */
+export interface Stage0Event extends Base {
+	kind: "stage0";
+	paneId: string;
+	/** The pane's tree, which is also the attribution key: a pane is judged on the
+	 *  processes working where it works. */
+	cwd: string;
+	speak: boolean;
+	/** The rule that decided it — the one that fired, or the one that permitted
+	 *  silence, or `silence` when no process of the pane was running. */
+	rule: string;
+	/** That rule's own sentence, clipped. */
+	why: string;
+	/** The finding, present exactly when `speak` is true. */
+	pid?: number;
+	ageMs?: number;
+	stalled?: boolean;
+	/** True when the deciding process was past its allowance but still consuming
+	 *  CPU: silence for a reason, not silence by default. */
+	working?: boolean;
+}
+
 export interface EventByKind {
 	decision: DecisionEvent;
 	tick: TickEvent;
@@ -374,6 +409,7 @@ export interface EventByKind {
 	inspection: InspectionEvent;
 	action: ActionEvent;
 	watchdog: WatchdogEvent;
+	stage0: Stage0Event;
 	claim: ClaimEvent;
 	outcome: OutcomeEvent;
 }
@@ -444,6 +480,7 @@ const TICK_FIELDS: readonly FieldSpec[] = [
 	{ key: "durationMs", type: "number", required: true },
 	{ key: "models", type: "strings", required: true },
 	{ key: "dry", type: "boolean", required: true },
+	{ key: "observe", type: "boolean", required: false },
 	{ key: "asks", type: "number", required: false },
 	{ key: "capped", type: "boolean", required: false },
 	{ key: "capReason", type: "string", required: false },
@@ -473,6 +510,18 @@ const INSPECTION_FIELDS: readonly FieldSpec[] = [
 	{ key: "latencyMs", type: "number", required: true },
 	{ key: "proposed", type: "boolean", required: true },
 	{ key: "degraded", type: "boolean", required: true },
+];
+
+const STAGE0_FIELDS: readonly FieldSpec[] = [
+	{ key: "paneId", type: "string", required: true },
+	{ key: "cwd", type: "string", required: true },
+	{ key: "speak", type: "boolean", required: true },
+	{ key: "rule", type: "string", required: true },
+	{ key: "why", type: "string", required: true },
+	{ key: "pid", type: "number", required: false },
+	{ key: "ageMs", type: "number", required: false },
+	{ key: "stalled", type: "boolean", required: false },
+	{ key: "working", type: "boolean", required: false },
 ];
 
 const ACTION_FIELDS: readonly FieldSpec[] = [
@@ -614,6 +663,8 @@ export function parseEvent(line: string): SchemaEvent | undefined {
 			return accept<ActionEvent>(raw, ACTION_FIELDS);
 		case "watchdog":
 			return accept<WatchdogEvent>(raw, WATCHDOG_FIELDS);
+		case "stage0":
+			return accept<Stage0Event>(raw, STAGE0_FIELDS);
 		case "claim":
 			return accept<ClaimEvent>(raw, CLAIM_FIELDS);
 		case "outcome":
@@ -688,6 +739,7 @@ export interface TickRecord {
 	durationMs: number;
 	models: string[];
 	dry: boolean;
+	observe?: boolean;
 	capped?: boolean;
 	capReason?: string;
 	dailyCostUsd?: number;
@@ -769,6 +821,13 @@ export interface WatchdogRecord {
 export function makeWatchdog(record: WatchdogRecord): WatchdogEvent {
 	const { ts, ...rest } = record;
 	return { schema: SCHEMA_VERSION, kind: "watchdog", ts: stamp(ts), ...rest };
+}
+
+export type Stage0Record = Omit<Stage0Event, "schema" | "kind" | "ts"> & { ts?: string };
+
+export function makeStage0(record: Stage0Record): Stage0Event {
+	const { ts, ...rest } = record;
+	return { schema: SCHEMA_VERSION, kind: "stage0", ts: stamp(ts), ...rest };
 }
 
 export interface ClaimRecord {

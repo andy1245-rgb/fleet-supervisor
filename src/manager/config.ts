@@ -162,6 +162,13 @@ export interface Config {
 	once: boolean;
 	/** Decide and report, but send no prompts and write no claim files. */
 	dry: boolean;
+	/** Observe: run the whole pipeline — stage 0's verdict for every pane, the model's
+	 *  proposal for every pane that moved — record all of it, join each decision to the
+	 *  pane's next observed state, and send nothing at all: no prompt, no notification,
+	 *  no held ask. Distinct from `dry`, which decides and discards: a dry tick judges
+	 *  nothing and records no pending decision, so there is no join to what happened
+	 *  next, which is the whole point of observing. */
+	observe: boolean;
 	/** Model that decides first: a `commandcode/…` id for the responses wire, `needle3`
 	 *  for the retired local engine, or an OpenRouter model id. */
 	primary: string;
@@ -257,6 +264,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		intervalMs: num(env.AGENTFLEET_INTERVAL_MS, 60_000),
 		once: bool(env.AGENTFLEET_ONCE),
 		dry: bool(env.AGENTFLEET_DRY),
+		// Both may be set. Observe is the stricter promise (nothing leaves) and the one
+		// that leaves a record, so where they differ it decides.
+		observe: bool(env.AGENTFLEET_OBSERVE),
 		// The decision step runs on the hosted model. AGENTFLEET_PRIMARY still selects
 		// anything else, `needle3` included: the local engine is retired from the hot path,
 		// not deleted, and its artefacts go in phase 8.

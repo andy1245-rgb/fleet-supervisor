@@ -91,6 +91,7 @@ function testConfig(dir: string, dailyCostCapUsd: number | null): Config {
 		intervalMs: 60_000,
 		once: true,
 		dry: true,
+		observe: false,
 		primary: "fake:primary",
 		escalator: "fake:escalator",
 		threshold: 0.7,

@@ -107,6 +107,7 @@ function testConfig(dir: string, fleetCapUsd: number, globalCapUsd: number | nul
 		intervalMs: 60_000,
 		once: true,
 		dry: true,
+		observe: false,
 		primary: "fake:primary",
 		escalator: "fake:escalator",
 		threshold: 0.7,

@@ -28,16 +28,17 @@ import { needleModel } from "../decision/needle.ts";
 import { openRouterModel } from "../decision/openrouter.ts";
 import { piModel, PI_TIMEOUT_MS } from "../decision/pi.ts";
 import type { Decision, DecisionInput, DecisionModel } from "../decision/types.ts";
-import { defaultNotifier, type Notifier } from "../notify/telegram.ts";
+import { defaultNotifier, type Level, type Notifier } from "../notify/telegram.ts";
 import { scanTriggers, type ClaimHistory, type Trigger } from "./triggers.ts";
-import { scan as watchdogScan, formatAge, findingFields } from "../watchdog/rules.ts";
+import { scan as watchdogScan, formatAge, findingFields, sampleProcesses } from "../watchdog/rules.ts";
+import { needsAWord, stage0Fields } from "../watchdog/needs-a-word.ts";
 import { appendAsk, pendingAsks, pendingKey, readAskLog } from "./answer.ts";
 import { askId, shouldAsk, type AskPolicy, type AskRecord, type Fork } from "./ask.ts";
 import { askPolicyFor, loadConfig, type Config } from "./config.ts";
 import { dailySpend, utcDay } from "../metrics/daily.ts";
 import { globalSpend, type GlobalSpend } from "../metrics/global.ts";
 import { inspect, type Finding } from "./inspector.ts";
-import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type DecisionReasoning, type SchemaEvent } from "../metrics/schema.ts";
+import { eventLine, forkKindOf, makeAction, makeClaim, makeDecision, makeInspection, makeOutcome, makeStage0, makeTick, makeTrigger, makeWatchdog, type ActionDisposition, type DecisionReasoning, type SchemaEvent } from "../metrics/schema.ts";
 import { DEFAULT_WINDOW_TICKS, decidedAt, isSilent, judge, observedTicks, parsePending, pendingJson, pendingPath, recordPending, type Observation, type PendingDecision } from "../metrics/outcome.ts";
 
 export interface TickReport {
@@ -57,6 +58,13 @@ export interface TickReport {
 	escalationFailed: number;
 	costUsd: number;
 	dry: boolean;
+	/** True when this tick observed rather than acted: everything is in the log and
+	 *  nothing was sent. Always `false` on a `dry` tick, which decides and discards. */
+	observe: boolean;
+	/** Stage-0 verdicts this tick: how many panes it said needed a word, out of how
+	 *  many it was asked about. The ratio is the architecture's own cost question. */
+	stage0Spoke: number;
+	stage0Panes: number;
 	/** True when a cap skipped this tick's model calls: nothing was consulted, no
 	 *  `decision` row was written, and the panes that moved are still waiting for the
 	 *  next tick that can afford them. */
@@ -109,6 +117,22 @@ function writeJson(path: string, value: unknown): void {
 function appendEvent(config: Config, event: Record<string, unknown>): void {
 	mkdirSync(dirname(config.eventsPath), { recursive: true });
 	appendFileSync(config.eventsPath, `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`);
+}
+
+/** The channel, with the plug pulled. Observe's promise is that nothing leaves the
+ *  process — not a prompt, not a notification — so every send becomes a log line
+ *  saying what would have been sent. Wrapped once rather than guarded at each of the
+ *  dozen call sites: a mode whose guarantee depends on remembering it at every site is
+ *  a mode that will one day send something.
+ *
+ *  The text is kept. This is the operator's own fleet and the log is on their own
+ *  disk; what observe withholds is the message, not the record that there was one. */
+function observingNotifier(config: Config): Notifier {
+	return {
+		async send(text: string, level: Level = "info"): Promise<void> {
+			appendEvent(config, { kind: "notify_observed", level, text });
+		},
+	};
 }
 
 /** One typed measurement. Every stage's numbers reach the log through
@@ -398,6 +422,23 @@ export async function askGate(args: GateArgs): Promise<GateOutcome> {
 	});
 	if (!gate.ask) return { held: false, policy, why: gate.why, forks: gate.forks };
 
+	// Observe: the gate's verdict is computed and written to the log, and nothing is
+	// parked. An ask is a message to the operator, and the whole of observe is that no
+	// message leaves — so the row says what would have been asked, and the caller
+	// records the action as `observed / would-hold` instead of doing it.
+	if (config.observe === true) {
+		appendEvent(config, {
+			kind: "ask_observed",
+			paneId: args.paneId,
+			group: args.group,
+			op: args.decision.op,
+			policy,
+			why: gate.why,
+			forks: gate.forks,
+		});
+		return { held: true, policy, why: gate.why, forks: gate.forks };
+	}
+
 	if (args.pending.has(pendingKey(args.paneId, args.decision.op, args.decision.argument))) {
 		appendEvent(config, {
 			kind: "ask_pending",
@@ -532,6 +573,8 @@ const NOTHING_APPLIED: ApplyOutcome = { held: false, prompted: false, askRecorde
  *  held action is written to asks.jsonl and never touches the pane. */
 export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 	const { config, finding } = args;
+	const observe = config.observe === true;
+	const suppressed = config.dry || observe;
 	const proposed = finding.proposed;
 	if (!proposed) return NOTHING_APPLIED;
 
@@ -606,7 +649,7 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 	}
 
 	if (decision.op === "declare_done") {
-		if (!config.dry) {
+		if (!suppressed) {
 			const base = args.claim;
 			const claim: Claim = {
 				paneId: proposed.paneId,
@@ -622,8 +665,8 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 			if (base?.budget) claim.budget = base.budget;
 			writeClaim(claim);
 		}
-		appendEvent(config, { kind: "inspector_done", paneId: proposed.paneId, group: args.group, text: decision.argument, policy: gate.policy, why: gate.why, dry: config.dry });
-		note(config.dry ? "dry" : "sent", config.dry ? "dry" : "ok", true);
+		appendEvent(config, { kind: observe ? "inspector_done_observed" : "inspector_done", paneId: proposed.paneId, group: args.group, text: decision.argument, policy: gate.policy, why: gate.why, dry: config.dry, observe });
+		note(observe ? "observed" : config.dry ? "dry" : "sent", observe ? "would-declare-done" : config.dry ? "dry" : "ok", true);
 		return { held: false, prompted: false, askRecorded };
 	}
 
@@ -638,16 +681,16 @@ export async function applyFinding(args: ApplyArgs): Promise<ApplyOutcome> {
 		note("skipped", "capped", true);
 		return { held: false, prompted: false, askRecorded };
 	}
-	if (config.dry) {
+	if (suppressed) {
 		appendEvent(config, {
-			kind: "inspector_dry",
+			kind: observe ? "inspector_observed" : "inspector_dry",
 			paneId: proposed.paneId,
 			text: decision.argument,
 			decision: describeDecision(decision),
 			policy: gate.policy,
 			why: gate.why,
 		});
-		note("dry", "dry", true);
+		note(observe ? "observed" : "dry", observe ? "would-nudge" : "dry", true);
 		return { held: false, prompted: false, askRecorded };
 	}
 	const promptStarted = Date.now();
@@ -777,7 +820,17 @@ async function decideFor(args: { mode: DecisionMode; input: DecisionInput; prima
 }
 
 export async function tick(deps: Deps): Promise<TickReport> {
-	const { port, notifier, config } = deps;
+	const { port, notifier: outbox, config } = deps;
+	// Observe is the strict promise: the whole pipeline runs, every verdict and proposal
+	// is written, and nothing leaves the process. `suppressed` is "do not touch the
+	// world" (dry and observe alike); `rehearsing` is dry's narrower claim, that the
+	// tick leaves no state behind at all — which observe must not honour, because a
+	// decision with no `pending` record cannot be joined to what happened next, and
+	// that join is the entire point of observing.
+	const observe = config.observe === true;
+	const suppressed = config.dry || observe;
+	const rehearsing = config.dry && !observe;
+	const notifier: Notifier = observe ? observingNotifier(config) : outbox;
 	const nowMs = deps.now ?? Date.now;
 	// One clock read for the tick's own duration, which is what "is a pass getting
 	// slower" is measured from.
@@ -884,6 +937,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				durationMs: elapsed(tickStartedAt),
 				models: [],
 				dry: config.dry,
+				observe,
 				capped: true,
 				capScope: fired.scope,
 				capReason,
@@ -904,6 +958,9 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			escalationFailed: 0,
 			costUsd: 0,
 			dry: config.dry,
+			observe,
+			stage0Spoke: 0,
+			stage0Panes: 0,
 			capped: true,
 			capScope: fired.scope,
 			dailyCostUsd: spend.spentUsd,
@@ -925,7 +982,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// as its baseline, so the movement that prompted it can never be read as its
 	// answer. Dry is a rehearsal — its snapshot is real, its decisions are not — so
 	// it neither judges nor records, and leaves none of its own state behind.
-	const outcomeState = config.dry ? { open: new Map<string, PendingDecision>(), judged: 0 } : judgeOpen(config, agents, idleTicks);
+	const outcomeState = rehearsing ? { open: new Map<string, PendingDecision>(), judged: 0 } : judgeOpen(config, agents, idleTicks);
 	let pendingOutcomes = outcomeState.open;
 	// Only a decision recorded below has to be written at the end of the tick: the
 	// judged set was already persisted by `judgeOpen`.
@@ -943,8 +1000,38 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// model reads a trigger — and `falsifier` is undefined so no second call is possible.
 	const primary: DecisionModel = mode === "pi" && deps.models === undefined ? piModel({ timeoutMs: Math.min(PI_TIMEOUT_MS, config.decisionTimeoutMs) }) : built.primary;
 	const falsifier: DecisionModel | undefined = mode === "pi" ? undefined : built.falsifier;
-	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd, globalCostCapUsd: globalEnabled ? globalCapUsd : null, globalSpendUsd: wide?.totalUsd ?? null, decisionMode: mode, ...(modeReading.note === undefined ? {} : { decisionModeNote: modeReading.note }) };
+	const report: TickReport = { agents: agents.length, moved: moves.length, decisions: [], triggers, inspected: 0, promptsSent: 0, asks: 0, escalated: 0, escalationFailed: 0, costUsd: 0, dry: config.dry, observe, stage0Spoke: 0, stage0Panes: 0, capped: false, dailyCostUsd: spend.spentUsd, dailyCostCapUsd: config.dailyCostCapUsd, globalCostCapUsd: globalEnabled ? globalCapUsd : null, globalSpendUsd: wide?.totalUsd ?? null, decisionMode: mode, ...(modeReading.note === undefined ? {} : { decisionModeNote: modeReading.note }) };
 	const pending = pendingAsks(readAskLog(config.asksPath));
+
+	// Stage 0, on every pane, in observe only. One /proc pass for the whole fleet and
+	// a filter per pane: the cheap question is cheap, which is the point of asking it
+	// before the expensive one. A pane whose verdict speaks is where stage 1 earns its
+	// keep; a pane whose verdict is silent is recorded with the rule that permitted the
+	// silence, so "we said nothing" can be audited rather than inferred from a
+	// missing row. `AGENTFLEET_STAGE0` decides whether this gates the model or only
+	// describes the fleet — off by default, because the mined corpus measures the
+	// rules at 71 % precision and 5 % recall (docs/stage0-residue-2026-11-10.md), which
+	// makes them a fine alarm and a poor gate.
+	report.stage0Panes = agents.length;
+	const speaking = new Set<string>();
+	if (observe) {
+		let samples: ReturnType<typeof sampleProcesses> = [];
+		try {
+			samples = sampleProcesses();
+		} catch (e) {
+			// A /proc read that fails costs the verdict, not the tick.
+			appendEvent(config, { kind: "stage0_error", error: (e as Error).message });
+		}
+		for (const agent of agents) {
+			const target = { paneId: agent.paneId, cwd: agent.foregroundCwd || agent.cwd };
+			const verdict = needsAWord(target, samples);
+			appendMetric(config, makeStage0(stage0Fields(target, verdict)));
+			if (verdict.speak) {
+				report.stage0Spoke += 1;
+				speaking.add(agent.paneId);
+			}
+		}
+	}
 
 	if (degraded) await notifier.send(degraded, "alert").catch(() => undefined);
 
@@ -1012,16 +1099,20 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		} else if (decision.op === "flag") {
 			// flag is already a request for a human, so it is reported rather than
 			// gated: holding it would mean holding a notification.
-			appendEvent(config, { kind: "flag", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision) });
+			appendEvent(config, { kind: observe ? "flag_observed" : "flag", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision) });
 			await notifier.send(`${entry.move.paneId} (${group}) needs a decision\n${decision.argument}`, "alert").catch(() => undefined);
-			action = { disposition: "skipped", reason: "flag-reported", latencyMs: 0, gated: false };
+			action = observe
+				? { disposition: "observed", reason: "would-flag", latencyMs: 0, gated: false }
+				: { disposition: "skipped", reason: "flag-reported", latencyMs: 0, gated: false };
 		} else if (decision.op === "declare_done") {
 			const gate = await gated();
 			forks = gate.forks;
 			if (gate.held) {
-				action = { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
+				action = observe
+					? { disposition: "observed", reason: "would-hold", latencyMs: 0, gated: true }
+					: { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
 			} else {
-				if (!config.dry) {
+				if (!suppressed) {
 					const base = entry.claim;
 					const claim: Claim = {
 						paneId: entry.move.paneId,
@@ -1039,9 +1130,11 @@ export async function tick(deps: Deps): Promise<TickReport> {
 					if (base?.budget) claim.budget = base.budget;
 					writeClaim(claim);
 				}
-				appendEvent(config, { kind: "done", paneId: entry.move.paneId, group, text: decision.argument, policy: gate.policy, why: gate.why });
+				appendEvent(config, { kind: observe ? "done_observed" : "done", paneId: entry.move.paneId, group, text: decision.argument, policy: gate.policy, why: gate.why });
 				await notifier.send(`${entry.move.paneId} (${group}) finished\n${decision.argument}`, "info").catch(() => undefined);
-				action = { disposition: config.dry ? "dry" : "sent", reason: config.dry ? "dry" : "ok", latencyMs: 0, gated: true };
+				action = observe
+					? { disposition: "observed", reason: "would-declare-done", latencyMs: 0, gated: true }
+					: { disposition: config.dry ? "dry" : "sent", reason: config.dry ? "dry" : "ok", latencyMs: 0, gated: true };
 			}
 		} else {
 			// nudge
@@ -1054,10 +1147,16 @@ export async function tick(deps: Deps): Promise<TickReport> {
 				const gate = await gated();
 				forks = gate.forks;
 				if (gate.held) {
-					action = { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
+					action = observe
+						? { disposition: "observed", reason: "would-hold", latencyMs: 0, gated: true }
+						: { disposition: "held", reason: "gate", latencyMs: 0, gated: true };
 				} else if (report.promptsSent >= config.maxPromptsPerTick) {
 					appendEvent(config, { kind: "nudge_capped", paneId: entry.move.paneId, text: decision.argument, policy: gate.policy, why: gate.why });
 					action = { disposition: "skipped", reason: "capped", latencyMs: 0, gated: true };
+				} else if (observe) {
+					// The prompt that would have gone out, with the gate's verdict beside it.
+					appendEvent(config, { kind: "nudge_observed", paneId: entry.move.paneId, group, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
+					action = { disposition: "observed", reason: "would-nudge", latencyMs: 0, gated: true };
 				} else if (config.dry) {
 					appendEvent(config, { kind: "nudge_dry", paneId: entry.move.paneId, text: decision.argument, decision: describeDecision(decision), policy: gate.policy, why: gate.why });
 					action = { disposition: "dry", reason: "dry", latencyMs: 0, gated: true };
@@ -1130,7 +1229,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		// silent ops asked for nothing, so their absence of an action is the point —
 		// and `flag` writes a `skipped` row precisely because a human notification is
 		// not an instruction to the pane.
-		if (!config.dry && (isSilent(decision.op) || action?.disposition === "sent")) {
+		if (!rehearsing && (isSilent(decision.op) || action?.disposition === "sent" || observe)) {
 			pendingOutcomes = recordPending(pendingOutcomes, decidedAt({ paneId: entry.move.paneId, group, op: decision.op, argument: decision.argument }, entry.move.agent.completionSeq));
 			pendingDirty = true;
 		}
@@ -1256,7 +1355,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 		}
 	}
 
-	if (!config.dry) saveMarks(nextMarks);
+	if (!rehearsing) saveMarks(nextMarks);
 	writeJson(config.triggerHistoryPath, Object.fromEntries(nextHistory));
 	writeJson(config.cooldownsPath, cooldowns);
 	// Written only when it changed: a rewrite with nothing to say is a file whose
@@ -1285,6 +1384,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
 			durationMs: elapsed(tickStartedAt),
 			models: [...models].sort(),
 			dry: config.dry,
+			observe,
 			ts: tickStamp,
 			dailyCostUsd: Number(report.dailyCostUsd.toFixed(6)),
 			...capFields(config, wide, report.costUsd),
@@ -1295,14 +1395,16 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
 async function main(): Promise<void> {
 	const config = loadConfig();
-	const notifier = defaultNotifier();
+	// Observe must not reach the phone even when the tick itself throws, so the
+	// failure path uses the same plugged channel the tick does.
+	const notifier = config.observe ? observingNotifier(config) : defaultNotifier();
 	const port = herdrPort();
 
 	do {
 		try {
 			const report = await tick({ port, notifier, config });
 			console.error(
-				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${fleetCapLine(report)}${capLine(report)}${report.capped ? ` · capped${report.capScope === "global" ? " (global)" : report.capScope === "fleet" ? " (fleet)" : ""}` : ""}${report.dry ? " (dry)" : ""}`,
+				`fleet tick: ${report.agents} agents, ${report.moved} moved, ${report.decisions.length} decisions, ${report.stage0Spoke}/${report.stage0Panes} spoke, ${report.triggers.length} triggers, ${report.inspected} inspected, ${report.escalated} escalated, ${report.escalationFailed} escalations failed, ${report.promptsSent} prompts, ${report.asks} held, $${report.costUsd.toFixed(6)}${fleetCapLine(report)}${capLine(report)}${report.capped ? ` · capped${report.capScope === "global" ? " (global)" : report.capScope === "fleet" ? " (fleet)" : ""}` : ""}${report.observe ? " (observe)" : report.dry ? " (dry)" : ""}`,
 			);
 		} catch (e) {
 			const message = `fleet tick failed: ${(e as Error).message}`;
