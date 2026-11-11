@@ -43,3 +43,8 @@ lora-*.safetensors
 # The needle3 traces already tracked predate this rule and are clean by construction:
 # that engine refused every row, so its argument is one of the adapter's constants.
 bench/results/*.traces.jsonl
+
+# The slate runner copies each variant's task set here before scoring it. Those
+# copies are session text, so the directory is ignored even though it sits inside
+# the records tree (docs/CORPUS-POLICY.md §1).
+bench/results/.slate-scratch/

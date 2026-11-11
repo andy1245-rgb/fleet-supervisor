@@ -155,7 +155,37 @@ back between 37/40 and 40/40 refusals). Everything below is read with that in mi
 
 ## The model, on the residue — the fair test the ladder never had
 
-<!-- MODEL-ON-RESIDUE -->
+Now the model, on those 24 rows and nowhere else — the fairest test the ladder has ever had, because
+it is asked only the question the architecture leaves it. Three runs: `needle3` twice (its stock 30 s
+adapter deadline, then a 600 s cap, since the first run measures the deadline rather than the engine),
+and the four slate archives that exist.
+
+| model | exact | `leave` | `nudge` | refusals | p50 | regret / task |
+|---|---|---|---|---|---|---|
+| **always `nudge`** (constant) | **54.2 %** | — | 100 % | — | — | 2.2917 |
+| **always `flag`** (constant) | 0.0 % | — | — | — | — | **1.4583** |
+| always `leave` (constant) | 45.8 % | 100 % | — | — | — | 3.2500 |
+| `d4` (4 layers, tuned) | **37.5 %** | 0.0 % | 69.2 % | 7/24 | 6,088 ms | 1.8333 |
+| `d20` (20 layers, tuned) | 12.5 % | 9.1 % | 15.4 % | 16/24 | 31,670 ms | 1.4167 |
+| `control-d8` (8 layers, no adapter) | 4.2 % | 0.0 % | 7.7 % | 22/24 | 13,096 ms | 1.4167 |
+| `d8` (8 layers, tuned) | 0.0 % | 0.0 % | 0.0 % | 10/24 | 14,208 ms | 2.2917 |
+| `needle3` @ 600 s cap | 0.0 % | 0.0 % | 0.0 % | **24/24** | 36,601 ms | 1.4583 |
+| `needle3` @ 30 s cap | 0.0 % | — | — | 24/24 | 30,006 ms | 1.4583 |
+
+**Nothing beats the constant, and the fair test says so more clearly than the unfair one did.** The
+best variant is `d4` at 37.5 % against always-nudge's 54.2 % — eight points of accuracy short on a
+24-row set, i.e. two rows. `d20` and `control-d8` do edge past always-flag on regret (1.4167 against
+1.4583), and that is **one point of regret over the whole set**, which is one row: at n = 24 it is
+indistinguishable from noise, and it is claimed here as such rather than as a win.
+
+`needle3` is the cleanest result in the table: **24 of 24 refusals at a 600 s cap**, p50 36.6 s. It is
+not being cut off — it declines. The 30 s run beside it is a measurement of the adapter's deadline on
+a loaded box (p50 exactly 30,006 ms, every row at the cap), which is why it is shown and not quoted.
+
+What this means for the trial, stated plainly: on the rows the rules select, the model is still the
+wrong side of a constant. The trial stays open because the residue is far too small to close it — and
+because the way to grow it is `AGENTFLEET_OBSERVE` below, not another threshold. But nobody should
+read this document as evidence that the model is coming good under the new architecture. It is not.
 
 ## `AGENTFLEET_OBSERVE=1`
 

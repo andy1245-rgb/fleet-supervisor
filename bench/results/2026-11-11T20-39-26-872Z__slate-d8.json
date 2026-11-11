@@ -1,0 +1,101 @@
+{
+	"recordedAt": "2026-11-11T20:39:26.872Z",
+	"model": "slate-d8",
+	"taskSetSha": "5107ea0a31d02527",
+	"n": 24,
+	"ops": {
+		"exactMatch": 0,
+		"perOpRecall": {
+			"leave": 0,
+			"nudge": 0
+		}
+	},
+	"selective": {
+		"coverageAtThreshold": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		},
+		"accuracyAtCoverage": {
+			"0.3": 0,
+			"0.5": 0,
+			"0.7": 0,
+			"0.9": 0
+		}
+	},
+	"regret": {
+		"matrix": {
+			"leave": {
+				"leave": 0,
+				"nudge": 5,
+				"declare_done": 4,
+				"flag": 2
+			},
+			"nudge": {
+				"leave": 6,
+				"nudge": 0,
+				"declare_done": 4,
+				"flag": 1
+			},
+			"declare_done": {
+				"leave": 5,
+				"nudge": 5,
+				"declare_done": 0,
+				"flag": 2
+			},
+			"flag": {
+				"leave": 6,
+				"nudge": 1,
+				"declare_done": 1,
+				"flag": 0
+			}
+		},
+		"total": 55,
+		"perTask": 2.2917,
+		"weightsSwept": false
+	},
+	"usableOutputRate": 0.5833,
+	"accuracyGivenUsable": {
+		"value": 0,
+		"n": 14
+	},
+	"baselines": {
+		"alwaysLeave": {
+			"exactMatch": 0.4583,
+			"regretPerTask": 3.25
+		},
+		"alwaysNudge": {
+			"exactMatch": 0.5417,
+			"regretPerTask": 2.2917
+		},
+		"alwaysDeclareDone": {
+			"exactMatch": 0,
+			"regretPerTask": 4
+		},
+		"alwaysFlag": {
+			"exactMatch": 0,
+			"regretPerTask": 1.4583
+		}
+	},
+	"latencyMs": {
+		"p50": 14208,
+		"p95": 16562
+	},
+	"costUsd": {
+		"total": 0,
+		"per1k": 0
+	},
+	"refusals": 10,
+	"coverage": {
+		"sampledPerOp": {
+			"leave": 11,
+			"nudge": 13
+		},
+		"corpusPerOp": {
+			"leave": 11,
+			"nudge": 13
+		}
+	},
+	"notes": "slate d8: layers 8, labels leave|nudge|declare_done|flag, engine 343.1s wall, python bridge finetune/slate_bridge.py"
+}
