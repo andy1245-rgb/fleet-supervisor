@@ -322,6 +322,21 @@ function parseLimit(args: string[]): number | undefined {
 	return undefined;
 }
 
+/** A second task set, for a slate scored on a *subset* of the corpus — stage 0's
+ *  residue, where the model is the only thing left to compare. Default is the
+ *  shipped task set, so an unflagged run measures exactly what it always did. */
+function parseTaskset(args: string[]): string | undefined {
+	const flag = args.find((arg) => arg.startsWith("--taskset="));
+	return flag ? (flag.split("=")[1] ?? undefined) : undefined;
+}
+
+/** Where the report lands. A residue run must not overwrite `SLATE.md`, which
+ *  describes the whole corpus and is quoted by the README. */
+function parseReport(args: string[]): string {
+	const flag = args.find((arg) => arg.startsWith("--report="));
+	return flag ? join(ROOT, "results", (flag.split("=")[1] ?? "SLATE.md")) : join(ROOT, "results", "SLATE.md");
+}
+
 function parseOnly(args: string[]): Set<string> | undefined {
 	const flag = args.find((arg) => arg.startsWith("--variants="));
 	if (!flag) return undefined;
@@ -333,7 +348,9 @@ async function main(): Promise<void> {
 	const all = variants();
 	const only = parseOnly(args);
 	const requested = parseLimit(args) ?? 24;
-	const { tasks, sha } = loadTasks();
+	const taskset = parseTaskset(args);
+	const reportPath = parseReport(args);
+	const { tasks, sha } = taskset === undefined ? loadTasks() : loadTasks(resolve(taskset));
 	const sample = sampleStratified(tasks, requested);
 	if (sample.note) console.error(`slate: ${sample.note}`);
 	const scratch = join(ROOT, "results", ".slate-scratch");
@@ -354,12 +371,12 @@ async function main(): Promise<void> {
 	}
 	if (runs.length === 0) {
 		const markdown = slateMarkdown(runs, all, sha, requested);
-		writeFileSync(join(ROOT, "results", "SLATE.md"), `${markdown}\n`);
+		writeFileSync(reportPath, `${markdown}\n`);
 		throw new Error("no exported variant found in finetune/out — nothing to compare (see finetune/out/slate/*/ for why)");
 	}
 	const markdown = slateMarkdown(runs, all, sha, requested);
-	writeFileSync(join(ROOT, "results", "SLATE.md"), `${markdown}\n`);
-	console.error(`slate: wrote ${join(ROOT, "results", "SLATE.md")}`);
+	writeFileSync(reportPath, `${markdown}\n`);
+	console.error(`slate: wrote ${reportPath}`);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {

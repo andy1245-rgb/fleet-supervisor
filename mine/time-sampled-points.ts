@@ -93,6 +93,7 @@ export interface TimePoint {
 	labelReason: string;
 	// Provenance of the sampling decision.
 	seq: number;
+	fromSeq: number;
 	windowMs: number;
 	/** Milliseconds from the turn's last message to the next human message.
 	 *  `null` when no human message follows in the session. */
@@ -112,6 +113,11 @@ interface Turn {
 	toolErrors: number;
 	timestamp: string;
 	seq: number;
+	/** The seq this turn started at: the first assistant or tool message after the
+	 *  last human one. A consumer that needs the turn's whole shape — the stage-0
+	 *  measurement needs each tool call's duration — can slice the transcript without
+	 *  re-deriving the boundary. */
+	fromSeq: number;
 	lastRole: string;
 }
 
@@ -144,7 +150,7 @@ function firstLine(text: string): string {
 }
 
 function startTurn(seq: number, timestamp: string, role: string): Turn {
-	return { texts: [], calls: [], toolErrors: 0, timestamp, seq, lastRole: role };
+	return { texts: [], calls: [], toolErrors: 0, timestamp, seq, fromSeq: seq, lastRole: role };
 }
 
 /** `derive` is the whole labelling rule: one function, so the sweep and the written
@@ -222,6 +228,7 @@ export function scanSession(shown: Session, windowMs: number): { points: TimePoi
 			label,
 			labelReason: reason,
 			seq: turn.seq,
+			fromSeq: turn.fromSeq,
 			windowMs,
 			gapMs,
 			nextLabel,

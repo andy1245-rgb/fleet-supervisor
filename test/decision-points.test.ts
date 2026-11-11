@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { labelFor } from "../mine/decision-points.ts";
-import { LABEL_TO_OP, isLabel, type Label } from "../src/labeling/label-to-op.ts";
+import { LABEL_TO_OP, RESIDUE_LABEL_TO_OP, isLabel, type Label } from "../src/labeling/label-to-op.ts";
 
 function labelOf(text: string): Label | undefined {
 	return labelFor(text)?.label;
@@ -137,4 +137,15 @@ test("labelFor never returns quiet: an absence is not text", () => {
 	for (const text of ["cancel", "ok", "why is the build red", "make sure we dont push", ".", "thank you"]) {
 		assert.notEqual(labelFor(text)?.label, "quiet", text);
 	}
+});
+
+test("the residue mapping differs from the general one in exactly one cell", () => {
+	// Two tables, one file. The general answer is what a label means for a supervisor
+	// looking at any row; the residue answer is what it means on a row stage 0 already
+	// said needs a word. A third opinion would be a second definition of the corpus,
+	// so the difference is pinned to the single cell it is meant to be.
+	const differing = (Object.keys(LABEL_TO_OP) as Label[]).filter((label) => LABEL_TO_OP[label] !== RESIDUE_LABEL_TO_OP[label]);
+	assert.deepEqual(differing, ["stop"]);
+	assert.equal(RESIDUE_LABEL_TO_OP.stop, "flag", "on the residue a human halting the work is evidence a human was needed");
+	assert.equal(RESIDUE_LABEL_TO_OP.quiet, "leave", "and the rules being wrong keeps a way to say so");
 });

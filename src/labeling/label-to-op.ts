@@ -97,3 +97,29 @@ export const LABEL_TO_OP: Readonly<Record<Label, Op>> = {
 export function isLabel(value: unknown): value is Label {
 	return typeof value === "string" && Object.hasOwn(LABEL_TO_OP, value);
 }
+
+// ------------------------------------------------ the same labels, on the residue
+//
+// A second table, for one narrow question: on rows stage 0 already said needed a
+// word, what should the word have been? It lives here, beside the first, so that
+// "what does this label mean" still has exactly one home and a reader sees both
+// answers at once instead of finding a second mapping in a runner.
+//
+// It differs in one cell, and the difference is the point. `stop` is `leave` in the
+// general table because a halt says nothing about whether the pane needed a
+// supervisor. On the residue a rule has already fired — something is genuinely
+// wrong — so a human halting the work is evidence that a human *was* needed, and the
+// honest op is `flag`, not silence. Read the other way: `leave` in the residue means
+// the rules fired and the supervisor should still have stayed quiet, which is the
+// cell that prices a false alarm.
+//
+// `quiet` stays `leave` for the reason it exists: the rules are wrong sometimes, and
+// a residue that mapped silence to action would have no way to say so.
+export const RESIDUE_LABEL_TO_OP: Readonly<Record<Label, Op>> = {
+	continue: "nudge",
+	instruction: "nudge",
+	redirect: "nudge",
+	question: "nudge",
+	stop: "flag",
+	quiet: "leave",
+};
