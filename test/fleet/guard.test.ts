@@ -33,7 +33,7 @@ test("the bind test takes all of 127/8, because a bind address cannot be forged"
 	for (const host of ["127.0.0.1", "127.0.0.2", "127.1.2.3", "::1", "[::1]", "localhost"]) {
 		assert.equal(isLoopbackBind(host), true, `${host} is a loopback bind`);
 	}
-	for (const host of [null, "", "0.0.0.0", "::", "100.115.189.66", "192.168.1.4"]) {
+	for (const host of [null, "", "0.0.0.0", "::", "100.64.0.1", "192.168.1.4"]) {
 		assert.equal(isLoopbackBind(host), false, `${String(host)} is not a loopback bind`);
 	}
 });
@@ -42,7 +42,7 @@ test("the peer address is a fact for a sentence, never a gate", () => {
 	assert.equal(clientIsLoopback("127.0.0.1"), true);
 	assert.equal(clientIsLoopback("::ffff:127.0.0.1"), true);
 	assert.equal(clientIsLoopback("::1"), true);
-	assert.equal(clientIsLoopback("100.115.189.66"), false);
+	assert.equal(clientIsLoopback("100.64.0.1"), false);
 	assert.equal(clientIsLoopback(null), false);
 });
 
