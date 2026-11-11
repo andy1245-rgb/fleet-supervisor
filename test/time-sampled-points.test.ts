@@ -170,3 +170,30 @@ test("every point can become a task, and quiet is the only new label", async () 
 	assert.equal(task.input.idleTicks, 0, "the window must not reach the model as a field");
 	assert.equal(task.input.status, "idle");
 });
+
+test("a session carrying a credential shape is excluded whole, by shape and not by text", async () => {
+	const { sessionExclusion } = await import("../mine/time-sampled-points.ts");
+	// Composed at runtime so this fixture does not itself contain a key shape: the
+	// guard reads tracked files, and a test that plants a real-looking key in one is
+	// the failure it is watching for.
+	const key = `AKIA${"ABCDEFGHIJKLMNOP"}`;
+	const dirty = session([
+		message(1, 0, "user", "check the deploy"),
+		message(2, 5, "toolResult", `export AWS_ACCESS_KEY_ID=${key}`, { tool: "bash" }),
+		message(3, 6, "assistant", "done"),
+	]);
+	assert.deepEqual(sessionExclusion(dirty), ["aws-key"]);
+	const clean = session([message(1, 0, "user", "check the deploy"), message(2, 5, "assistant", "done")]);
+	assert.deepEqual(sessionExclusion(clean), []);
+});
+
+test("a placeholder-looking credential still excludes the session: the miner is stricter than the guard", async () => {
+	const { sessionExclusion } = await import("../mine/time-sampled-points.ts");
+	const { credentialHits } = await import("../src/corpus/credentials.ts");
+	const line = `password: "${"test-placeholder-value"}"`;
+	const shown = session([message(1, 0, "user", "wire the config"), message(2, 5, "assistant", line)]);
+	// The guard exempts a placeholder so a fixture is not a finding; the corpus does
+	// not argue with a session, it drops it (docs/CORPUS-POLICY.md §3).
+	assert.deepEqual(credentialHits(line, { placeholderExempt: true }), []);
+	assert.deepEqual(sessionExclusion(shown), ["assigned-secret"]);
+});

@@ -42,6 +42,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { labelFor } from "./decision-points.ts";
+import { credentialHits } from "../src/corpus/credentials.ts";
 import { DEFAULT_ROOT, loadCorpus, type Session } from "./session-cache.ts";
 import type { Root } from "./session-cli.ts";
 import { toTask, type Task } from "../bench/tasks/from-captures.ts";
@@ -51,7 +52,12 @@ import type { Op } from "../src/decision/types.ts";
 
 const HERE = import.meta.dirname;
 const POINTS_PATH = join(HERE, "out", "points-time-sampled.jsonl");
-const TASKS_PATH = join(HERE, "..", "bench", "tasks", "tasks-time-sampled.jsonl");
+// The task set stays under `mine/out` too. It is the same rows as the points file
+// with the fields `bench/tasks/from-captures.ts` reads, and docs/CORPUS-POLICY.md is
+// unambiguous about where mined text may be written: an ignored path, never a tracked
+// one. `bench/tasks` holds the frozen snapshot the bench runner writes when a record
+// needs a citable sha; that is the runner's own file, not this miner's.
+const TASKS_PATH = join(HERE, "out", "tasks-time-sampled.jsonl");
 
 /** The fleet's own tick interval (`AGENTFLEET_INTERVAL_MS`, default 60 000). The
  *  window is the horizon a supervisor actually decides over: it looks at a pane,
@@ -152,10 +158,7 @@ function derive(gapMs: number | null, nextLabel: Label | null, windowMs: number)
 	return { label: "quiet", reason: `no human message for ${seconds}s, past the ${Math.round(windowMs / 1000)}s window`, censored: false };
 }
 
-export interface ScanReport {
-	points: TimePoint[];
-	sessions: number;
-	turns: number;
+export interface ScanCounters {
 	skippedSynthetic: number;
 	skippedUnlabelled: number;
 	skippedEmptyTurn: number;
@@ -163,8 +166,28 @@ export interface ScanReport {
 	censored: number;
 }
 
+export interface ScanReport extends ScanCounters {
+	points: TimePoint[];
+	sessions: number;
+	turns: number;
+	/** Sessions dropped at mine time because their text carried a credential shape.
+	 *  Excluded, not sanitised: docs/CORPUS-POLICY.md. Reportable as a count and as
+	 *  the shape that fired — never as the text, and never as the session id. */
+	excludedSessions: number;
+	excludedPoints: number;
+	excludedByShape: Map<string, number>;
+}
+
+/** The exclusion decision, as a pure function so it can be tested and so `main`
+ *  cannot decide it differently: a session whose own text carries a credential shape
+ *  is dropped whole, not edited. Returns shape names only, never the matched text and
+ *  never the session id — the count is publishable, the content is not. */
+export function sessionExclusion(shown: Session): string[] {
+	return credentialHits(shown.messages.map((message) => message.text).join("\n")).map((hit) => hit.name);
+}
+
 /** One session → its time-sampled points. */
-export function scanSession(shown: Session, windowMs: number): { points: TimePoint[]; counters: Omit<ScanReport, "points" | "sessions" | "turns"> } {
+export function scanSession(shown: Session, windowMs: number): { points: TimePoint[]; counters: ScanCounters } {
 	const { session, messages } = shown;
 	const points: TimePoint[] = [];
 	let skippedSynthetic = 0;
@@ -369,9 +392,22 @@ function main(argv: readonly string[]): void {
 		skippedEmptyTurn: 0,
 		skippedMidCall: 0,
 		censored: 0,
+		excludedSessions: 0,
+		excludedPoints: 0,
+		excludedByShape: new Map<string, number>(),
 	};
 	for (const shown of sessions) {
 		const scan = scanSession(shown, windowMs);
+		// The exclusion runs over the session's whole text, not the rows that survive
+		// sampling: a secret in a tool result the tail clipped off is still in the
+		// session, and the policy excludes the session rather than editing it.
+		const excluded = sessionExclusion(shown);
+		if (excluded.length > 0) {
+			report.excludedSessions += 1;
+			report.excludedPoints += scan.points.length;
+			for (const name of excluded) report.excludedByShape.set(name, (report.excludedByShape.get(name) ?? 0) + 1);
+			continue;
+		}
 		report.points.push(...scan.points);
 		report.turns += scan.points.length + scan.counters.skippedEmptyTurn + scan.counters.skippedMidCall;
 		report.skippedSynthetic += scan.counters.skippedSynthetic;
@@ -397,6 +433,10 @@ function main(argv: readonly string[]): void {
 	for (const [label, n] of labels) console.log(`  ${label.padEnd(12)} ${String(n).padStart(7)}  ${pct(n, report.points.length).padStart(6)}`);
 	console.log(`ops (scorable rows only):`);
 	for (const [op, n] of ops) console.log(`  ${op.padEnd(12)} ${String(n).padStart(7)}  ${pct(n, rows).padStart(6)}`);
+	if (report.excludedSessions > 0) {
+		const shapes = [...report.excludedByShape].map(([name, n]) => `${name} ${n}`).join(", ");
+		console.log(`excluded: ${report.excludedSessions} sessions (${report.excludedPoints} points) carried a credential shape — ${shapes}`);
+	}
 	console.log(`skipped: ${report.skippedSynthetic} synthetic user messages, ${report.skippedUnlabelled} unlabelled human messages, ${report.skippedEmptyTurn} empty turns, ${report.skippedMidCall} turns that ended mid-tool-call`);
 	console.log(`wrote ${POINTS_PATH}  sha ${pointsSha}`);
 	console.log(`wrote ${TASKS_PATH}  sha ${tasksSha}  (${tasks.length} tasks)`);

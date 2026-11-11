@@ -14,6 +14,12 @@
 //     never a credential.
 
 import { execFileSync } from "node:child_process";
+// The credential shapes are shared with the miner, which excludes a session for the
+// same reason this fails a commit: a guard and a miner that disagree about what a
+// secret looks like is a corpus that either excludes what the guard would have
+// passed or, worse, the reverse. `src/corpus/credentials.ts` is the one list; Node
+// 24's type stripping lets this script import it without a build step.
+import { CREDENTIALS, PLACEHOLDER } from "../src/corpus/credentials.ts";
 
 const CORPUS_PATHS = [/^mine\/out\//, /^bench\/tasks\/.*\.jsonl$/, /^finetune\/out\//, /^\.cache\//];
 
@@ -23,19 +29,6 @@ const SESSION_TEXT = [
 	{ name: "session-id", re: /\bsession:[0-9a-f]{8,}\b/ },
 	{ name: "terminal-tail", re: /"tail"\s*:\s*"[\s\S]{40,}/ },
 ];
-
-const CREDENTIALS = [
-	{ name: "openai-key", re: /\bsk-[A-Za-z0-9_-]{20,}/ },
-	{ name: "github-token", re: /\b(ghp|gho|ghu|ghs)_[A-Za-z0-9]{20,}/ },
-	{ name: "aws-key", re: /\bAKIA[0-9A-Z]{16}\b/ },
-	{ name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
-	{ name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/ },
-	{ name: "basic-auth-url", re: /\/\/[^\s/:@]+:[^\s/@]+@[^\s/]+/ },
-	// A literal assignment. Prose that merely contains the word is fine.
-	{ name: "assigned-secret", re: /\b(api[_-]?key|secret|password|passwd)\b\s*[:=]\s*["'][^"']{16,}["']/i },
-];
-
-const PLACEHOLDER = /test|fake|dummy|example|placeholder|redacted|your[_-]?key|xxxx|\.\.\./i;
 
 const DATA_FILE = /\.(jsonl|ndjson)$|^bench\/results\/|^bench\/fixtures\/|\.csv$/;
 

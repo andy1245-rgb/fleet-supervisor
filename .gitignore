@@ -35,3 +35,11 @@ bench/tasks/*.jsonl
 # Trainer scratch dirs created by ad-hoc probes
 checkpoints/
 lora-*.safetensors
+
+# Bench traces. A trace row carries the model's own sentence, and for any model that
+# answers rather than refusing that sentence is the tail's words rearranged — session
+# text in a tracked file, which docs/CORPUS-POLICY.md forbids. The record keeps the
+# scores and the task-set sha; the trace stays on disk beside the corpus it came from.
+# The needle3 traces already tracked predate this rule and are clean by construction:
+# that engine refused every row, so its argument is one of the adapter's constants.
+bench/results/*.traces.jsonl
