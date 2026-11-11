@@ -15,7 +15,8 @@
 		"bench": "node bench/runners/run.ts",
 		"rescore": "node bench/runners/rescore.ts",
 		"tick": "node src/manager/tick.ts",
-		"watchdog": "node src/watchdog/rules.ts"
+		"watchdog": "node src/watchdog/rules.ts",
+		"check:corpus": "node tools/check-corpus.mjs"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",

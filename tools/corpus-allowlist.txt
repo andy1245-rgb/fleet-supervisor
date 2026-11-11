@@ -1,0 +1,4 @@
+# Files allowed to contain data-shaped content. One path per line, with the reason.
+# An exemption is a deliberate act: adding a line here says "this content is authored,
+# not captured". If you cannot say that in one sentence, it does not go here.
+bench/fixtures/decision-input-idle.json   # authored fixture: this repo's own metrics backfill, hand-written
