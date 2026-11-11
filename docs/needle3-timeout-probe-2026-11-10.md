@@ -18,7 +18,7 @@ paraphrase of the pane it was shown (`docs/CORPUS-POLICY.md`). The record keeps 
 cites the task-set sha, which is what a reader needs to re-score with the corpus supplied out of
 band.
 
-One deviation from the handoff's command, deliberate: `--taskset` names the **frozen 502-row
+One deliberate deviation: `--taskset` names the **frozen 502-row
 snapshot** rather than the working `bench/tasks/tasks.jsonl`. The working file is now `89e3ec2d…`
 (527 rows, `nudge` 524 / `leave` 3 / `flag` 0 / `declare_done` 0), so sampling it would have
 measured a different corpus from every record this repository cites and could not have produced a
@@ -75,14 +75,14 @@ All four appear in the n = 22 record, so this is a paired comparison rather than
 | `dp-0483` | 19,543 ms, `suppressed` 1, conf 0.0025 | 52,264 ms, `suppressed` 1, conf 0.0027 | identical |
 
 The cap changed nothing: same suppressed counts, same refusal, same argument class. What moved is
-the clock, by up to **16×** on the same row, the same input and the same output — this box is at
-load average 14.33 on 12 cores with `llama-server` holding 743 % CPU, so every latency column
+the clock, by up to **16×** on the same row, the same input and the same output — the development
+machine was at load average 14.33 on 12 cores with `llama-server` holding 743 % CPU, so every latency column
 here is inflated and comparable to nothing. The probe's conclusion is robust to that because the
 margin to the cap is over 10×; its latency column is not a measurement of anything.
 
-## A correction to the handoff
+## A correction to the earlier account
 
-The handoff states that 12 of the 22 rows in that record are timeouts "and more than half the
+The earlier account states that 12 of the 22 rows in that record are timeouts "and more than half the
 sample never got an answer at all". Counted from the traces, it is **8 of 22** (36 %):
 `dp-0038`, `dp-0062`, `dp-0064`, `dp-0071`, `dp-0082`, `dp-0141`, `dp-0143`, `dp-0146`. The rest
 split as **10** rows with `suppressed > 0` and **4** genuine no-calls at `suppressed == 0`
@@ -109,9 +109,19 @@ Two parts of the ladder survive that verdict, and they are different parts:
 The `dataset.ts` fix is the right next experiment on the suppression half — the arguments being
 suppressed are spans that training drew from a tail the sidecar does not serve — but it cannot
 touch the task-framing half, and it changes no archive until a retrain, which at 262.4 s/step on
-CPU is not an overnight job. **Do not read this probe as a case for retraining tonight.**
+CPU is not a one-session job. **This probe is not a case for retraining.**
 
 The decision step already runs on a hosted model with `needle3` retired from the hot path, so
 nothing in the running supervisor depends on this. The finding is for the *next* time someone
 proposes tuning the local ladder rather than replacing it: the engine is not out of time, it is
 out of grounding and out of belief in the task.
+
+## What the same engine scores elsewhere
+
+The same tier-0-filter premise was measured on a second project, `localAlexa`, and the confidence
+signal was useless there too: `needle3` separated right from wrong on its **382-row intent set at
+AUROC 0.523** — a coin flip — against a TF-IDF+SVC at **93.2 % for 0.61 ms**. That result does not
+transfer straight across in either direction: Cactus's published **0.814 AUROC** belongs to their
+post-trained `-hybrid` checkpoints, which carry a trained probe, and the base engine has none. The
+conclusion is not that the idea fails. It is that **the probe is the product**, and this ladder is
+not running a model that has one.

@@ -7,7 +7,7 @@ and the smallest thing that would resolve it.
 Severity: **B** = blocks building as designed. **M** = misleading or latent, will bite.
 **U** = unmeasured, so unknown. **L** = a real limit of the approach, not a bug.
 
-Nothing here is committed to git. All numbers were measured on this box unless marked.
+Nothing here is committed to git. All numbers were measured on the development machine unless marked.
 
 ---
 
@@ -82,7 +82,7 @@ Every one of these was believed until measured, and each changed a decision.
 | C4 | JSON spacing caused a train/serve skew | Does not exist |
 | C5 | The static prefix is 333 tokens | Training-side. Serve-side with 4 tools it is **156** compact; the frame is **12**, not 13 and not 6 |
 | C6 | `max_tail_chars 900` vs serve 700 was the train/serve tail mismatch | The real defect was **direction**: training kept the head, serving keeps the end |
-| C7 | `R_BUDGET = 864` | ~432 on this box (A3) |
+| C7 | `R_BUDGET = 864` | ~432 on the development machine (A3) |
 | C8 | The corpus's `declare_done` collapse was undertraining | The corpus was **99.43% one class**; there was nothing to learn |
 
 ---
@@ -94,7 +94,7 @@ Every one of these was believed until measured, and each changed a decision.
   budget is far tighter than the 595–697 planned against. Settles in one experiment.
 - **D2.** The clean decode cost. Everything measured was under load 17–217; `eval.json`
   says 206/320/1100 ms for d4/d8/d20 but a contended re-measure gave 20–25 s. **Do not
-  size an architecture on either number until the box is quiet.**
+  size an architecture on either number until the machine is quiet.**
 - **D3.** The 4.1× speedup from `seq 640` (63.3 vs 262.4 s/step) — measured under load.
   Load-bearing for the whole budget question, so it must be re-taken on a quiet box.
 - **D4.** Whether the noise floor of the leak estimators is acceptable at C=60–100. At 60
@@ -130,7 +130,7 @@ Every one of these was believed until measured, and each changed a decision.
 - **L5. The model's competence is selection, verifiably.** Its one demonstrated strength is
   copying a span and picking from a closed set. Every design that asked it to enumerate,
   count, or compose has failed or been redesigned.
-- **L6. Training on this box is ~2 h/epoch per profile at seq 1024.** Five profiles × 12
+- **L6. Training on the development machine is ~2 h/epoch per profile at seq 1024.** Five profiles × 12
   epochs is ~120 h. That is a hardware limit, not a scheduling one.
 
 ---
@@ -138,7 +138,7 @@ Every one of these was believed until measured, and each changed a decision.
 ## F. Environment and dependency limits
 
 - **F1. `.venv` is not ours to patch.** The confidence-head drop and the 2-bit writer both
-  live in the installed package; we worked around one and cannot fix the other.
+  live in the installed package; one is worked around and the other cannot be fixed.
 - **F2. No GPU is usable by JAX on either machine.** Both are Intel iGPUs; JAX has no
   Vulkan backend; `libneedle.so` has no GPU path at all (pthreads + nothing else).
   Vulkan *is* a training backend in `ggml`, but unwired and unstable here.

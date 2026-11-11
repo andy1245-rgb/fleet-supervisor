@@ -16,8 +16,8 @@ of.**
 
 The supervisor shape — herdr as the only observation/action boundary, workers writing their own
 claims, sequence-delta change detection, one decision per moved pane, one gate on every mutation
-— survives every attempt to break it below. That half of the plan is sound, and I could not
-falsify it.
+— survives every attempt to break it below. That half of the plan is sound, and this review could
+not falsify it.
 
 The learning half does not survive. Mined labels → benchmark → fine-tune → escalation ladder is a
 chain in which **the ground truth is a function of the human message's character count and first
@@ -67,17 +67,17 @@ deleted, and six edits in the modules that stay.
 
 ## 1. Is the supervisor-over-herdr shape right?
 
-**The claim.** `docs/specs/2026-10-26-agent-fleet-design.md` §1 and §3: herdr is the only
+**The claim.** `docs/specs/agent-fleet-design.md` §1 and §3: herdr is the only
 observation and action boundary; polling `herdr agent list` every 60 s and diffing two integer
 counters per pane is the cost gate the whole system rests on; a decision happens only for panes
 whose `completion_seq` or `state_change_seq` advanced.
 
 **Evidence for.** It is the cheapest correct thing measured. `README.md:64` records the tier-0
-tick (21 panes, nothing moved, one `agent list`) at **0.094 s and 0 model calls**. I ran
-`herdr agent list` against the live machine: **21 panes, 7,820 bytes, one call, O(1) in fleet
+tick (21 panes, nothing moved, one `agent list`) at **0.094 s and 0 model calls**. `herdr agent
+list` was run against the live machine: **21 panes, 7,820 bytes, one call, O(1) in fleet
 size**. Polling one endpoint does not get more expensive as the fleet grows; the alternatives
 below do. The `HerdrPort` interface, the envelope-not-exception treatment of `agent_blocked`, and
-the refusal to own PTYs are all correct and I found no way to break them.
+the refusal to own PTYs are all correct, and no way to break them was found.
 
 **Evidence against — one counter, not two.** The design says two counters exist because they
 distinguish meanings: "`completion_seq` bumps when a turn completes; `state_change_seq` bumps on
@@ -243,7 +243,7 @@ the inverse of the deployment's.**
 | `idleTicks` | 1 | `0` |
 | `acceptance` | 1 | absent |
 | `phase` | 4 | `unknown` 316, `implement` 70, `verify` 68, `research` 48 |
-| `cwd` | 15 | `/home/operator` 282 (56%), `/home` 80, `toolInterfacer` 45 |
+| `cwd` | 15 | `$HOME` 282 (56%), `/home` 80, `toolInterfacer` 45 |
 | `title`, `last`, `tail` | ~unique | the only varying evidence |
 
 Four of twelve fields are constants, and `phase` is itself derived from the same tail
@@ -453,7 +453,7 @@ proposal is re-gated.
    $0.0002274/decision**.
 5. **Its most common trigger is not an anomaly — it is the steady state.** `collisions()`
    (`src/fleet/groups.ts:44-56`) buckets by exact resolved cwd among panes with
-   `status === "working"`, requiring ≥2. Live sample: **15 of 21 panes share `/home/operator`**
+   `status === "working"`, requiring ≥2. Live sample: **15 of 21 panes share `$HOME`**
    exactly. So the collision predicate is "two agents in the home directory are working at the
    same instant", and its frequency is:
 
@@ -489,7 +489,7 @@ response, and the inspector does not change it:
 bounded `pi -p` child with bash and read-only herdr, 120 s — becomes an **operator-invoked verb**,
 not a per-tick spend. That also settles a live inconsistency: `cheap` is the default and returns
 a degraded finding whenever `OPENROUTER_API_KEY` is unset, which the design's own changes section
-admits "means Tier 2 does nothing at all on this box today."
+admits "means Tier 2 does nothing at all on the development machine today."
 
 **Cost of changing:** one default in `config.ts:129`, one test. The `inspector.ts` module stays
 (the `deep` path is the only place the system does anything the per-pane decision structurally
@@ -537,7 +537,7 @@ the path-escape check is careful work (`escapesTree` resolves against the *pane'
 supervisor's). (e) is a budget predicate wearing a fork's clothes. (a), as above, is not a risk
 predicate at all.
 
-**d) What the operator actually wants that is missing.** Ranked by how often it would bind:
+**d) What is missing that an operator would act on.** Ranked by how often it would bind:
 1. **A channel that works** (§b) — without it there is nothing to tune.
 2. **An action budget** — `maxPromptsPerTick: 3` is a per-tick cap; there is no per-day cap on
    prompts, dollars, or notifications. A churning fleet can prompt 3/tick = 4,320/day.
@@ -573,7 +573,7 @@ counter in `events.jsonl`; the channel is the only real work, half a day.
   epochs is **5.5 h** — an overnight run on one box, not a project.
 - The reward is real if it lands: `control-d8` at 8 layers runs **p50 994 ms** against GLM's
   1568 ms, so a working local engine would be the *fastest* tier, not the cheapest one.
-- It removes a third-party dependency for the operator's own terminal contents, which is the only
+- It removes a third-party dependency for the human's own terminal contents, which is the only
   argument here that survives the cost analysis in §4.
 
 **Case against — five things, in ascending order of force.**
@@ -613,12 +613,12 @@ tokenizer.
 
 ---
 
-## 8. What I could not falsify
+## 8. What this review could not falsify
 
-I tried the following and each attempt failed, which is the honest basis for keeping those parts.
+Each attempt below failed, which is the honest basis for keeping those parts.
 
-1. **Workers write their own claims; the supervisor only reads them.** I could not falsify the
-   inversion itself: the supervisor has no way to know a session's intent or acceptance criteria,
+1. **Workers write their own claims; the supervisor only reads them.** The inversion itself could
+   not be falsified: the supervisor has no way to know a session's intent or acceptance criteria,
    and the alternative (infer it from the terminal tail) would produce two disagreeing opinions
    with no way to attribute either. **But the design statement is false in one path**, and the
    review should record it: `tick.ts:520-537` writes a claim with `state: "done"` on
@@ -626,21 +626,21 @@ I tried the following and each attempt failed, which is the honest basis for kee
    it is done" and "the supervisor decided it was done" are the same bytes, which is the rejected
    design's failure mode returning through the action channel. Fix: an `author` field on `Claim`,
    or stop writing and report instead (§3). One hour.
-2. **One decision per moved pane is the right cost unit.** I could not falsify it. The
+2. **One decision per moved pane is the right cost unit.** It could not be falsified. The
    alternative (a rules engine, no model) has to read the same tail, and the model call costs
    $0.0002274. The cost argument for a second tier collapses (§4), but the argument for *a* model
    call per move holds.
-3. **The regret matrix is the right way to weight ops.** I could not falsify the *weights*; I did
-   falsify the *matrix*, which is not square (below). No argument I could construct makes
+3. **The regret matrix is the right way to weight ops.** The *weights* could not be falsified; the
+   *matrix* could, and it is not square (below). No argument constructible for this review makes
    `leave → nudge` cheaper than 5 or `flag → nudge` dearer than 1.
-4. **The watchdog's structural process definition.** I read `src/watchdog/rules.ts` and did not
-   test it against a live process table; no claim in this review rests on it.
+4. **The watchdog's structural process definition.** `src/watchdog/rules.ts` was read and not
+   tested against a live process table; no claim in this review rests on it.
 5. **`parseDecision`'s refuse-to-act behaviour.** Unfalsifiable in the good sense: it maps every
    unparseable answer to `flag` with `refused: true`, and there is no path where a supervisor acts
    on an op it did not parse. That is the single most defensible design decision in the repo.
 
-**And one thing I found while trying, which is not an attempt that failed but a structural defect
-in the metric itself.**
+**And one thing found while trying, which is not a failed attempt but a structural defect in the
+metric itself.**
 
 `REGRET` in `bench/runners/run.ts:26-31` is typed `Record<Op, Record<Exclude<Op, "leave">, number>>`
 — the outer rows have **no `leave` column**. `regretOf` therefore returns 0 for any prediction of
@@ -663,16 +663,16 @@ This is the second-weakest link and it is the cheapest to fix: add the `leave` c
 rows that lack it, then re-derive. Cost: ~6 lines in `run.ts`, and every historical record's
 `regret` becomes incomparable — which is the correct outcome, because the numbers were wrong.
 
-**Limits of this review.** (i) I reconstructed the GLM record's 40-row subset from
+**Limits of this review.** (i) The GLM record's 40-row subset was reconstructed from
 `git show 490bfc2^:bench/runners/run.ts` (stride `i % floor(502/40) === 0`, sliced to 40), because
-that record predates the stratified sampler and carries no `coverage` block; my sampler
-re-implementation is validated by reproducing the 22-row and 40-row `sampledPerOp` exactly, but
+that record predates the stratified sampler and carries no `coverage` block; the sampler
+re-implementation here is validated by reproducing the 22-row and 40-row `sampledPerOp` exactly, but
 the pre-stratification subset is a reconstruction. (ii) The GLM record and the `control-d8` record
 have **no trace files** — traces were added in `4c19420`/`490bfc2` and only the `needle3` records
 have them — so the two numbers this review leans on hardest cannot be explained row-by-row. (iii)
 `w` (per-pane working duty cycle) is unmeasured; the collision-frequency table is a model, not a
-measurement, and §12 gives the experiment. (iv) I did not verify that `herdr agent list`'s 21
-panes are the same 21 the operator means by "20 live panes".
+measurement, and §12 gives the experiment. (iv) It is not verified here that `herdr agent list`'s 21
+panes are the same 21 that "20 live panes" refers to.
 
 ---
 
@@ -746,7 +746,7 @@ per-tick spend, and the gate's paralysis. That is the smallest set that fixes th
 | 4 | What is the real tick arithmetic? | Poll `herdr agent list` + `agent read` every 60 s for an hour (no model calls) and record the histogram of movers/tick and the per-pane working duty cycle. This replaces the cycle model in §4 and the `w` assumption in §5 with observations. | 1 h of shell + ~60 s of CPU |
 | 5 | Is the variant 22/22 refusal a grammar problem or a weights problem? | The traces already exist but drop `decision.raw`. Add `raw` to `TaskTrace` (`run.ts:328`) and re-run one `needle3` record; the sidecar's `reasoning` field is the only evidence that distinguishes "the grammar will not emit" from "the model declines". | 20 min, $0, 22 calls |
 | 6 | Is the op the deliverable, or the argument? | Replay ~30 historical nudge rows against a live agent twice: generic nudge ("you stopped mid-`implement`; continue or say what blocks you") vs the human's own text; score whether the agent resumes correctly. This is the only experiment that tests §2.5, and nothing in the repo can answer it. | ~2 h of agent time, needs a replay harness |
-| 7 | Does Tier 2 produce anything an operator acts on? | Run a day at `inspector: off` and a day at `cheap`; count notifications that led to an operator action. | 2 days wall clock, ≤$0.46 |
+| 7 | Does Tier 2 produce anything a human acts on? | Run a day at `inspector: off` and a day at `cheap`; count notifications that led to a human action. | 2 days wall clock, ≤$0.46 |
 | 8 | Does a cold start actually storm? | Delete the marks file and run one tick with `AGENTFLEET_DRY=1`; compare `report.moved` and wall clock against a warm tick. | 2 min, $0 |
 
 Experiments 1, 2, 4, 5 and 8 cost under two hours combined and would settle, between them, whether
@@ -766,7 +766,7 @@ human-message length p10/p50/p90/p99/max = 8 / 67 / 326 / 1576 / 2000
   >200 chars: 89   80-200: 143   <80: 270
 field cardinality over 502 task inputs:
   status 1 (idle)   claimState 1 (working)   idleTicks 1 (0)   acceptance 1 (absent)
-  phase 4 (unknown 316, implement 70, verify 68, research 48)   cwd 15 (/home/operator 282)
+  phase 4 (unknown 316, implement 70, verify 68, research 48)   cwd 15 ($HOME 282)
 tail chars p10/p50/p90/max = 773 / 1607 / 2320 / 2491 ; 417 tails contain a tool-call line
 phase→expectedOp: unknown→nudge 261, verify→nudge 53, implement→nudge 52, research→nudge 40,
                   implement→flag 18, unknown→flag 51, verify→flag 12, research→flag 8,
@@ -822,7 +822,7 @@ mean 16.46 min ; gaps ≤1 min: 74 ; ≤5 min: 221 ; ≤10 min: 282
 ```
 panes 21   statuses {idle 17, done 4, working 0}
 completion_seq === state_change_seq: 21/21
-distinct foreground_cwd: 7 ; /home/operator 15 (71%), then 1 each
+distinct foreground_cwd: 7 ; $HOME 15 (71%), then 1 each
 response size 7820 bytes, one call
 ```
 
@@ -841,16 +841,16 @@ z-ai/glm-flash-latest     in 0.0413 out 0.0758  ← 3.63x/6.60x cheaper, never b
 ```
 npm test  → 196 pass, 0 fail, 1.77 s   (README.md:79 still says "187 tests")
 npx tsc   → not re-run; the task states it is clean and no source was modified
-git status at session start → untracked: finetune/epoch_train.py (the operator's live trainer)
+git status at review start → untracked: finetune/epoch_train.py (an in-progress trainer)
 bench/results/ → 9 records + 5 .traces.jsonl (needle3 only; GLM and control-d8 have none)
 finetune/out/slate/*.cact → absent for d4, d8, d20, triage; control-d8 only
 live fleet → 21 panes, 17 idle / 4 done (A5)
 ```
 
-**Concurrent work, not mine.** Between 21:06 and 21:11 the untracked directory `src/metrics/`
+**Concurrent work outside this review.** Between 21:06 and 21:11 the untracked directory `src/metrics/`
 appeared in the working tree (`schema.ts`, `store.ts`, `render.ts`, `report.ts`, ~75 KB). Something
-else wrote it while this review was being read — most likely another session working the same
-flock. It is untouched by this review and nothing in it is cited here. It is worth one remark only
+else wrote it while this review was being read — most likely a concurrent session on the same
+repository. It is untouched by this review and nothing in it is cited here. It is worth one remark only
 because it is the right response to §8: `report.ts`'s own header names the questions
 "is the local model worth its latency" and "what fraction of a trigger yields something
 actionable", i.e. it is the instrument that would settle experiments 1, 4 and 7. If it lands

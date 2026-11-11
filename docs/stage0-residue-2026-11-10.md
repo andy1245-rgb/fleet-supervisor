@@ -10,6 +10,13 @@ this document answers is what they are worth, not whether they should exist.
 
 ## Stage 0 is a contract, not a code path
 
+Two stages, and the second one only ever sees what the first leaves:
+
+```
+stage 0   rules      is this pane in a state that ever needs a word?   deterministic, no labels
+stage 1   model      only on rows stage 0 fired: what should the word be?
+```
+
 `src/watchdog/needs-a-word.ts` — `needsAWord(pane, samples) → {speak, rule, why}` — built on the
 seven rules in `src/watchdog/rules.ts`. It adds exactly two things to them:
 
@@ -40,9 +47,12 @@ Every silent path returns the rule that permitted it and that rule's own sentenc
 nothing running says so, and says which of those two facts it is. Ten tests pin the contract,
 including that a working process in a pane does not mask a hung one beside it.
 
+The detector is not a proposal. The rules caught a runaway command on a live fleet while the
+decision model produced nothing — **the silence detector already existed, and it already worked.**
+
 ### The action contract: report, never stop
 
-The operator's rule, and it is absolute: **the watchdog never stops, kills or signals anything.** A
+The rule is absolute: **the watchdog never stops, kills or signals anything.** A
 flagged command gets exactly three things and there is no fourth:
 
 1. **the owning agent is prompted** — with the command, its pid, its age, the rule and that rule's
@@ -73,8 +83,8 @@ passes. Four comments that say "never" are not a guarantee; a test that fails on
 and `finetune/timesteps.py` each kill a subprocess **the supervisor itself spawned**, behind a
 deadline or on shutdown — the `herdr` CLI call, the `pi -p` inspector child, the needle python
 sidecar, a conversation it started. None of them can reach a pane's command, none is on the watchdog
-path, and the ones in the decision adapters are what stop a timed-out *request of ours* from hanging
-the tick. They are left alone deliberately: removing them would leak our own children and break the
+path, and the ones in the decision adapters are what stop a timed-out *request of the supervisor's* from hanging
+the tick. They are left alone deliberately: removing them would leak the supervisor's own children and break the
 deadline tests, and would not change the one thing the rule is about.
 
 ## The rules measured alone, on the mined corpus
@@ -246,9 +256,9 @@ flagged 16 of 17, which is the same prior toward action that cost it on the corp
    proposal is joined to what the pane did next. That corpus is the one this architecture needs, and
    it costs a few cents a day.
 4. **The trial's outcome is unchanged by this work.** The model is still under the constant on the
-   full corpus and, as below, on the residue. Nothing here says the idea fails; it says the fair
+   full corpus and, above, on the residue. Nothing here says the idea fails; it says the fair
    test is small, and the way to make it big is to observe rather than to argue.
-4. **What the wider project carries.** `fleet-manager` should end up carrying the watchdog rules,
+5. **What the wider project carries.** `fleet-manager` should end up carrying the watchdog rules,
    the notification channel, the events schema and the spend caps. `src/decision/`, `finetune/`
    and the ladder stay in place and out of the hot path: the trial is open, not closed.
 

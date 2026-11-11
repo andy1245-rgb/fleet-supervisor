@@ -24,8 +24,8 @@ Two reasons, both measured and both fatal to mining as the primary source:
    learn from.
 2. The mined renderer leaked the label into the input (`task-reframing.md` §1.4 D1,
    `dataset.ts:174-175`). A population that is 99.43% one class cannot expose that leak
-   as a leak; it looks like accuracy. Synthetic generation is the point at which we get to
-   decide the joint distribution of (state, label), so it is the point at which the leak is
+   as a leak; it looks like accuracy. Synthetic generation is the point at which the joint
+   distribution of (state, label) can be decided, so it is the point at which the leak is
    either designed out or reproduced.
 
 **What this spec consumes.** `docs/specs/role-grammars.md` is the authority for each
@@ -393,7 +393,7 @@ The three outcomes, and they are the only three:
 | C | meaning | consequence |
 |---|---|---|
 | `C ≥ 100` | the profile is trainable at the resolution §4.2 buys | full §9 gate; `resolution: "0.60-vs-0.50"` when `C ≥ 150`, `provisional` below it |
-| `40 ≤ C < 100` | the catalogue is too wide for the box at a usable resolution | the profile may be **generated and audited but not trained**: it is a candidate, and §4.4 names the three routes out |
+| `40 ≤ C < 100` | the catalogue is too wide for the machine at a usable resolution | the profile may be **generated and audited but not trained**: it is a candidate, and §4.4 names the three routes out |
 | `C < 40` | the op cannot carry a class | the op comes out of the catalogue (both the rows and the tool list: `AGENTS.md`, `slate.json` `triage`). Recompute `k`. |
 
 | k | C | bound by | R | val | val/op | train/op |
@@ -440,7 +440,7 @@ trade, not an oversight.
 
 ### 4.3 The wall clock, which is the binding constraint on the whole factory
 
-Measured on this box (`AGENTS.md`, `docs/specs/2026-10-26-agent-fleet-design.md`): **262.4
+Measured on the development machine (`AGENTS.md`, `docs/specs/agent-fleet-design.md`): **262.4
 s/step**, batch 16, seq 1024, **126.8 min/epoch** at 452 rows (29 steps). So
 
 ```
@@ -469,7 +469,7 @@ If the probe fails the gate:
 1. set `--max-len` to the smallest power of two ≥ p95(prompt+target tokens)+8 (§8.3), which
    is where the ~2× comes from, and re-probe;
 2. if still over, run 8 epochs and record `epochsOverride` with the probe numbers;
-3. if still over, **the profile is not trainable on this box** — say so and stop. Do not
+3. if still over, **the profile is not trainable on the development machine** — say so and stop. Do not
    shrink `C`: a corpus under the F1 floor is not a cheaper corpus, it is an unmeasurable
    one (§4.2).
 

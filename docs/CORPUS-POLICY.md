@@ -1,5 +1,8 @@
 # Corpus policy — what may leave this machine
 
+**Scope.** Which content from the session corpus may be committed to this repository, which may
+not, and the guard that enforces the distinction.
+
 **This repository is public.** Everything else here follows from that one sentence.
 
 ## The rule
@@ -52,7 +55,7 @@ metrics backfill.
 - **Identifiers that are not the shapes above.** A hostname, a path, an account name, a URL.
 - **Anything already in history.** This guard tests the current commit. If content was ever
   published, deletion is not enough — the commit still carries it, and rewriting public history is a
-  separate decision for the operator, not something to do quietly.
+  separate decision for the maintainer, not something to do quietly.
 
 ## Standing rules for anything mining the corpus
 

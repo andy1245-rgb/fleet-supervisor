@@ -1,9 +1,9 @@
 # Retrospective observe-only — the pi corpus mined as a supervisor record, 2026-11-10
 
-The supervisor had been waiting on a live week of fleet observation. It did not have to: this box
-holds 1,982 pi sessions and 278,659 messages of the operator's own work, and the miner had only ever
-read 117 files out of one of the two session roots. This is the corpus read properly, with a decision
-point defined so that `leave` can exist at all.
+The supervisor had been waiting on a live week of fleet observation. It did not have to: the local
+session corpus holds 1,982 pi sessions and 278,659 messages of local agent work, and the miner had
+only ever read 117 files out of one of the two session roots. This is the corpus read properly, with
+a decision point defined so that `leave` can exist at all.
 
 **Nothing here publishes a row.** Every number below is a count, a rate, a window or a sha.
 `docs/CORPUS-POLICY.md` is the rule and `npm run check:corpus` is the enforcement: mined text lives
@@ -12,7 +12,7 @@ and this document describes shapes rather than quoting anything an agent or a hu
 
 ## The corpus
 
-`~/.pi/agent/sessions/` (operator sessions) plus `~/.pi/agent/subforge/sessions/` (subagent runs),
+`~/.pi/agent/sessions/` (interactive sessions) plus `~/.pi/agent/subforge/sessions/` (subagent runs),
 read through the session-insights CLI:
 
 ```
@@ -24,7 +24,7 @@ read through the session-insights CLI:
 the corpus**, and none of the subagent half. It is left untouched: its corpus has to stay
 reproducible, and its definition is the thing being replaced.
 
-**Only the `main` root is mined.** 292 of the 1,982 sessions are the operator's; the other 1,690 are
+**Only the `main` root is mined.** 292 of the 1,982 sessions are interactive; the other 1,690 are
 subagent runs whose "user" turns are dispatcher prompts. A supervisor that learned from those would
 learn that a machine ordering an agent around is a human speaking — the exact opposite of the
 judgement `leave` encodes. The split is 292 `main` / 1,690 `sub`, and the sub root is excluded by
@@ -200,7 +200,7 @@ chat-completions adapter, which is a different wire and a different question).
 
 `bench/results/2026-11-11T07-41-45-180Z__commandcode_deepseek_deepseek-v4.1-flash.json`, n = 100
 stratified (`leave` 55 / `nudge` 45; corpus 593 / 480), 7 m 3 s wall, **$0.048266 recorded on the card
-for 100 decisions** — the operator's commandcode plan is flat, so the marginal spend is nothing while
+for 100 decisions** — the account's commandcode plan is flat, so the marginal spend is nothing while
 the record still prices what the calls would cost. Its trace stayed on disk, not in git.
 
 | | exact match | regret / task | `leave` recall | `nudge` recall |
@@ -273,7 +273,7 @@ class of the supervisor's work is already free and already right.
 
 **2. The `leave` question is mostly not a model's to answer.** The input carries no clock at the
 moment of decision (`idleTicks` 0, `status` idle by construction) while the label is dominated by how
-long the operator took to type, so what is left for content is the share the tail explains — a lot, as
+long a human took to type, so what is left for content is the share the tail explains — a lot, as
 the section above measures, but nearly all of it one comparison wide. A model that costs a call per
 moved pane to re-derive a comparison the gate already has is the thing this measurement argues
 against. What is genuinely worth a model is the minority question — *did this turn stop in a way that
@@ -309,17 +309,17 @@ them scoring is showing a constant.
 **6. What this does not measure.** Same caveat as the old corpus, one level down: these are turn ends
 in transcripts, not fleet snapshots, and no decision here has been scored against what a supervised
 fleet actually did next. `status` and `idleTicks` are reconstructions; the window is the sampling
-rule. The row is "this turn, and then this much of the operator's attention", which is the closest a
+rule. The row is "this turn, and then this much of a human's attention", which is the closest a
 transcript can get to "this pane, and then this supervisor's next tick".
 
 **7. One thing to keep out of reach.** The needle3 ladder is not re-run here and the probe already
-settled it (at a ten-minute cap: `op: null` on 4 of 4). Whether it is retired is the operator's
+settled it (at a ten-minute cap: `op: null` on 4 of 4). Whether it is retired is a maintainer
 decision, not this document's.
 
 ## How to reproduce
 
 ```sh
-node mine/session-cache.ts --root=main     # once: ~7 min for the 292 operator sessions
+node mine/session-cache.ts --root=main     # once: ~7 min for the 292 interactive sessions
 node mine/time-sampled-points.ts --sweep    # 292 → 1,363 points → 1,073 tasks, all under mine/out
 node bench/runners/baselines.ts mine/out/tasks-time-sampled.jsonl
 node bench/runners/run.ts commandcode/deepseek/deepseek-v4.1-flash --limit=100 \

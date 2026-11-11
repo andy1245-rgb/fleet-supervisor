@@ -648,7 +648,7 @@ kept out of the repository. The three primitives everything above is built from:
 
 ```python
 import ctypes, json, os, sys
-sys.path.insert(0, "/home/andrew/agentFleet/.venv/lib/python3.14/site-packages")
+sys.path.insert(0, os.path.expanduser("~/agentFleet/.venv/lib/python3.14/site-packages"))
 from needle.model.tokenizer import get_tokenizer
 
 V3 = os.path.expanduser("~/.cache/cactus-needle/v3/3.3.3")
