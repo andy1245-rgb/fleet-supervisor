@@ -10,7 +10,7 @@
 //
 // Run standalone: `node src/watchdog/rules.ts [--stalled]`.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 
 export interface CommandSample {
 	pid: number;
@@ -23,6 +23,10 @@ export interface CommandSample {
 	ancestors: string[];
 	/** True when this process is the foreground job of a terminal. */
 	foreground: boolean;
+	/** Working directory, when /proc/<pid>/cwd could be read. The attribution key for
+	 *  `needsAWord`: a pane is judged on the processes working where it works. Absent
+	 *  rather than empty when unreadable — an unknown directory is not a match. */
+	cwd?: string;
 }
 
 export interface Rule {
@@ -215,6 +219,16 @@ function basename(command: string): string {
 	return first.split("/").pop() ?? "";
 }
 
+function readCwd(pid: number): string | undefined {
+	try {
+		return readlinkSync(`/proc/${pid}/cwd`);
+	} catch {
+		// A process that exited between the listing and the read, or one this user may
+		// not inspect, has no cwd to report. Not a zero-length directory.
+		return undefined;
+	}
+}
+
 export function sampleProcesses(): CommandSample[] {
 	let pids: string[];
 	try {
@@ -249,6 +263,7 @@ export function sampleProcesses(): CommandSample[] {
 
 	const out: CommandSample[] = [];
 	for (const [pid, entry] of raw) {
+		const cwd = readCwd(pid);
 		out.push({
 			pid,
 			ppid: entry.stat.ppid,
@@ -257,6 +272,7 @@ export function sampleProcesses(): CommandSample[] {
 			command: entry.command,
 			ancestors: ancestorsOf(pid),
 			foreground: entry.stat.ttyNr > 0 && entry.stat.pgrp === entry.stat.tpgid,
+			...(cwd === undefined ? {} : { cwd }),
 		});
 	}
 	return out;
