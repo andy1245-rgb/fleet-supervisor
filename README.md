@@ -8,7 +8,7 @@ It is not a new agent loop and it does not re-implement one: the agents already 
 
 ### What runs in the hot path
 
-The decision step runs on `commandcode/deepseek/deepseek-v4.1-flash`, the model this deployment uses; `AGENTFLEET_PRIMARY` still selects anything else. The escalator is `z-ai/glm-5.3-flash`, and without an OpenRouter key in the environment every rule-fired escalation fails and returns the primary's own answer with `escalationFailed: true` — code-complete and unexercised, not a working second opinion. A decision call gets 90 s and `reasoning.effort: "low"`: the same call completed in 62.1 s and 64.6 s (a 45 s deadline censored 5 of 6 rows), and `none` is cheaper but changes the request and was never measured for answer quality.
+The decision step runs on `commandcode/deepseek/deepseek-v4.1-flash`, the model this deployment uses; `AGENTFLEET_PRIMARY` still selects anything else, `needle3` included. The escalator is `z-ai/glm-5.3-flash`, and without an OpenRouter key in the environment every rule-fired escalation fails and returns the primary's own answer with `escalationFailed: true` — code-complete and unexercised, not a working second opinion. A decision call gets 90 s and `reasoning.effort: "low"`: the same call completed in 62.1 s and 64.6 s (a 45 s deadline censored 5 of 6 rows), and `none` is cheaper but changes the request and was never measured for answer quality.
 
 The local engine and its fine-tune are off the hot path. `needle.ts`, the ladder and every artefact under `finetune/out/` remain in the tree until phase 8 removes them.
 
@@ -22,7 +22,7 @@ On the committed n = 22 stratified sample, `needle3` returned **no parseable dec
 
 Nothing usable: **five archives exist in the tree** — `d4`, `d8`, `d20`, `control-d4`, `control-d8` — but `triage` was never built, and the three tuned archives are one tune exported at three depths, the `d4` and `d8` adapters differing by a max tensor delta of 6.9e-3 (`bench/results/SLATE.md` records them; `finetune/out/` is gitignored, so a clone has the record rather than the archives). The `make slate` probe of `d4` measured 262.4 s per training step — 126.8 minutes per epoch against a 600 s budget — and was stopped after two steps. That probe ran on the **CPU** (`backend cpu float32` in `finetune/out/slate/_probe/d4/probe.log`), not on a GPU, so it bounds the software path rather than the model's trainability. `control-d8` does exist and prices depth: 994 ms p50 at 8 layers against 3776 ms at 20, at 37/40 refusals — cheaper, not better.
 
-### Why a refusal happened: suppressed or declined
+### Why a refusal happened: suppressed or declined, measured on n = 6
 
 A refusal can be the grounding gate withholding a proposal the model made (`suppressed > 0`), or a decode that produced nothing (`suppressed == 0`), and the two need different fixes. `suppressed` was computed by the sidecar and discarded until a change persisted it, so the historical records cannot answer it. A first run that captures it — `bench/results/2026-11-04T11-04-36-485Z__needle3.json`, n = 6, taken on a heavily loaded machine so its latency columns are not comparable to anything — splits cleanly in two:
 
