@@ -1017,8 +1017,17 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	const speaking = new Set<string>();
 	// Every pane as stage 0 sees it: the attributes it needs and nothing else. Built
 	// once because three places ask the same question — the verdicts, and the owner
-	// lookup for a watchdog finding.
-	const targets = agents.map((agent) => ({ paneId: agent.paneId, cwd: agent.foregroundCwd || agent.cwd }));
+	// lookup for a watchdog finding. The clock and the status travel with it so the
+	// idle-turn rule can be reached at all: without them `needsAWord` is told nothing
+	// about how long the pane has been resting, and an unwired rule is an unwired rule.
+	// `idleTicks` is detect()'s own count of ticks since the pane last changed, which is
+	// exactly the quantity the corpus measures as `gapMs`.
+	const targets = agents.map((agent) => ({
+		paneId: agent.paneId,
+		cwd: agent.foregroundCwd || agent.cwd,
+		idleTicks: idleTicks.get(agent.paneId) ?? 0,
+		status: agent.status,
+	}));
 	if (observe) {
 		let samples: ReturnType<typeof sampleProcesses> = [];
 		try {

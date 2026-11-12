@@ -264,3 +264,22 @@ test("the notification that would have been sent is logged instead, and flag is 
 		assert.equal(action?.reason, "would-flag");
 	});
 });
+
+test("the idle-turn rule is reachable from a tick: silence accumulates until it fires", async () => {
+	await withDir(async (dir) => {
+		// Three ticks with the pane not moving. `detect` counts ticks in which a pane
+		// did not change, so the third observe tick is where an idle pane crosses
+		// IDLE_TICKS. A rule that exists but is never handed a clock is a rule that
+		// never fires in the system; this is the test that would catch that.
+		const { IDLE_TICKS, IDLE_RULE } = await import("../src/watchdog/needs-a-word.ts");
+		const seen: Array<{ rule: string; speak: boolean }> = [];
+		for (let i = 0; i < IDLE_TICKS + 1; i += 1) {
+			await run(dir, decision({ op: "leave", argument: "on track" }));
+			const verdicts = rows(dir).filter((row) => row.kind === "stage0");
+			const last = verdicts[verdicts.length - 1];
+			if (last) seen.push({ rule: String(last.rule), speak: last.speak === true });
+		}
+		const fired = seen.filter((entry) => entry.rule === IDLE_RULE && entry.speak);
+		assert.ok(fired.length > 0, `no idle-turn verdict across ${IDLE_TICKS + 1} ticks: ${JSON.stringify(seen)}`);
+	});
+});
