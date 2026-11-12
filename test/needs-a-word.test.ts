@@ -103,3 +103,60 @@ test("the row keeps the verdict's own facts and never re-derives the rule", () =
 	const silent = stage0Fields(target, { speak: false, rule: "inference-server", why: "long-lived by design" });
 	assert.deepEqual(Object.keys(silent).sort(), ["cwd", "paneId", "rule", "speak", "why"]);
 });
+
+// ---------------------------------------------------------------- the idle rule
+//
+// The rule the first pass was missing. It is a clock, so the tests are about the
+// boundary and about who is allowed to reach it: one tick short is silence, a
+// working or finished pane is not this rule's business, and a caller with no clock
+// is never told a pane has been idle.
+
+const IDLE_TARGET = { paneId: "w1:p1", cwd: CWD, status: "idle", idleTicks: 2 };
+
+test("an agent idle for N ticks speaks, and names the rule", async () => {
+	const { IDLE_RULE } = await import("../src/watchdog/needs-a-word.ts");
+	const verdict = needsAWord(IDLE_TARGET, []);
+	assert.equal(verdict.speak, true);
+	assert.equal(verdict.rule, IDLE_RULE);
+	assert.match(verdict.why, /nobody is coming back/);
+	assert.ok(verdict.action, "and it carries the same action contract as a process finding");
+});
+
+test("one tick short is silence — the threshold is the threshold", async () => {
+	const { IDLE_TICKS } = await import("../src/watchdog/needs-a-word.ts");
+	const verdict = needsAWord({ ...IDLE_TARGET, idleTicks: IDLE_TICKS - 1 }, []);
+	assert.equal(verdict.speak, false);
+	assert.equal(verdict.rule, SILENCE_RULE);
+});
+
+test("working, blocked and done panes are not the idle rule's business", () => {
+	for (const status of ["working", "blocked", "done", "unknown"]) {
+		const verdict = needsAWord({ ...IDLE_TARGET, status, idleTicks: 99 }, []);
+		assert.equal(verdict.speak, false, status);
+	}
+});
+
+test("a caller with no clock is never told a pane has been idle", () => {
+	const verdict = needsAWord({ paneId: "w1:p1", cwd: CWD }, []);
+	assert.equal(verdict.speak, false);
+	assert.equal(verdict.rule, SILENCE_RULE);
+});
+
+test("a running command past its allowance outranks the clock", () => {
+	const running = sample({ command: "curl http://dead.host/x", elapsedMs: 30 * MINUTE });
+	const verdict = needsAWord({ ...IDLE_TARGET, idleTicks: 99 }, [running]);
+	assert.equal(verdict.speak, true);
+	assert.equal(verdict.rule, "command", "the process finding is the stronger evidence");
+	assert.ok(verdict.finding, "and it is a process finding, with a pid");
+});
+
+test("the idle rule's action hands the decision over and signals nothing", async () => {
+	const { idleActionFor } = await import("../src/watchdog/needs-a-word.ts");
+	const action = idleActionFor(IDLE_TARGET, 4);
+	assert.equal(action.signal, "none");
+	assert.equal(action.leavesRunning, true);
+	assert.match(action.prompt, /final decision is yours/i);
+	assert.match(action.prompt, /no input for 4 ticks/);
+	assert.match(action.prompt, /nothing will be/i);
+	assert.match(action.notify, /nothing was stopped/i);
+});

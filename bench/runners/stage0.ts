@@ -42,7 +42,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { toTask } from "../tasks/from-captures.ts";
 import { classify, RULES, type CommandSample } from "../../src/watchdog/rules.ts";
-import { needsAWord } from "../../src/watchdog/needs-a-word.ts";
+import { IDLE_RULE, IDLE_TICKS, IDLE_WHY } from "../../src/watchdog/needs-a-word.ts";
 import { RESIDUE_LABEL_TO_OP, type Label } from "../../src/labeling/label-to-op.ts";
 import { score, type Task } from "./run.ts";
 import { loadCorpus } from "../../mine/session-cache.ts";
@@ -93,6 +93,102 @@ interface TurnFiring {
 	worstMs: number;
 }
 
+/** The idle-turn rule, measured the way the brief asked: N derived from the
+ *  distribution on one half of the sessions, everything else reported on the other.
+ *
+ *  Two label definitions appear below and they are not interchangeable, which is the
+ *  whole point of this measurement:
+ *
+ *    * **pass 1's label** — "did a human speak inside the 60 s window after the turn
+ *      ended". The idle rule fires only on turns whose window expired with nobody
+ *      speaking, so scored this way the rule is 0 % precise and 0 % recall *by
+ *      construction*: its evidence is the complement of the label's, one tick later.
+ *      It is printed because the brief asked for the same definitions, and because a
+ *      reader deserves to see the tautology rather than be told about it.
+ *    * **the label at the firing instant** — the rule fires at T0 + N ticks, and the
+ *      question there is "was this pane actually blocked?". The corpus answers with
+ *      content rather than timing: the human's eventual message. An intervention
+ *      (`instruction`/`redirect`/`question`/`continue`) means the pane was blocked and
+ *      a supervisor speaking at N would have anticipated them; a `stop` means a human
+ *      was needed to end it; no message at all means nobody ever came back, which is
+ *      the pane finishing rather than being stuck. Timing selects, content judges — so
+ *      this is the one that can measure the rule.
+ */
+function idleReport(points: readonly TimePoint[], processFired: ReadonlySet<string>, tickMs: number): void {
+	// Split by a hash of the session id rather than a shuffle: deterministic without a
+	// seed, independent of file order, and stable if the corpus grows.
+	const inFit = (sessionId: string): boolean => {
+		let hash = 2166136261;
+		for (let i = 0; i < sessionId.length; i += 1) {
+			hash ^= sessionId.charCodeAt(i);
+			hash = Math.imul(hash, 16777619) >>> 0;
+		}
+		return hash % 2 === 0;
+	};
+	const fit = points.filter((point) => inFit(point.sessionId));
+	const hold = points.filter((point) => !inFit(point.sessionId));
+	const key = (point: TimePoint): string => point.sessionId + ":" + point.seq;
+
+	const content = (point: TimePoint): "nudge" | "flag" | "leave" => {
+		if (point.nextLabel === "instruction" || point.nextLabel === "redirect" || point.nextLabel === "question" || point.nextLabel === "continue") return "nudge";
+		if (point.nextLabel === "stop") return "flag";
+		return "leave";
+	};
+	const fired = (rows: readonly TimePoint[], n: number): TimePoint[] => rows.filter((point) => point.gapMs === null || point.gapMs > n * tickMs);
+
+	// N, from the fit half only, and without looking at a single label.
+	const replies = fit
+		.map((point) => point.gapMs)
+		.filter((gap): gap is number => gap !== null)
+		.sort((a, b) => a - b);
+	const at = (q: number): number => replies[Math.min(replies.length - 1, Math.floor(q * replies.length))] ?? 0;
+	const derived = Math.max(1, Math.ceil(at(0.5) / tickMs));
+
+	console.log("");
+	console.log("=== the idle-turn rule ===");
+	console.log(`fit half     ${fit.length} points, ${replies.length} with a reply`);
+	console.log(
+		`reply latency (fit half only): p25 ${(at(0.25) / 60_000).toFixed(2)}  p50 ${(at(0.5) / 60_000).toFixed(2)}  p75 ${(at(0.75) / 60_000).toFixed(2)}  p90 ${(at(0.9) / 60_000).toFixed(2)} min`,
+	);
+	console.log(`N            ${derived} ticks (${(derived * tickMs) / 60_000} min) — the first whole tick past the median reply, where a reply has stopped being the likely next event`);
+	console.log(`the built rule is ${IDLE_TICKS} ticks: ${IDLE_TICKS === derived ? "the same" : "DIFFERENT — the constant needs updating"}`);
+	console.log(`rule         ${IDLE_RULE}: ${IDLE_WHY}`);
+
+	for (const [name, rows] of [
+		["fit", fit],
+		["held out", hold],
+	] as const) {
+		const fire = fired(rows, derived);
+		const labels = fire.map(content);
+		const owedAll = rows.map(content).filter((label) => label !== "leave").length;
+		const owedFired = labels.filter((label) => label !== "leave").length;
+		console.log("");
+		console.log(`${name} — ${rows.length} points`);
+		console.log(`  fire rate   ${pct(fire.length, rows.length)}  (${fire.length}/${rows.length})`);
+		console.log(`  label mix   nudge ${labels.filter((l) => l === "nudge").length}  flag ${labels.filter((l) => l === "flag").length}  leave ${labels.filter((l) => l === "leave").length}`);
+		console.log(`  precision   ${pct(owedFired, fire.length)}  (${owedFired}/${fire.length}) — was the pane actually blocked?`);
+		console.log(`  coverage    ${pct(owedFired, owedAll)}  (${owedFired}/${owedAll}) — of every turn that owed a word, how many the rule sees`);
+		const p1Owed = rows.filter((point) => point.label !== null && point.label !== "quiet").length;
+		const p1Hit = fire.filter((point) => point.label !== null && point.label !== "quiet").length;
+		console.log(`  pass-1 def  precision ${pct(p1Hit, fire.length)}  coverage ${pct(p1Hit, p1Owed)} — and it can only be 0: the label's window expired on every row this rule fires on`);
+	}
+
+	// The residue the union leaves: a running command, or a pane that stopped.
+	const union = points.filter((point) => processFired.has(key(point)) || point.gapMs === null || point.gapMs > derived * tickMs);
+	const unionLabels = union.map(content);
+	const unionOwed = unionLabels.filter((label) => label !== "leave").length;
+	console.log("");
+	console.log("=== the residue, stage 0 as a whole (process rules ∪ idle rule) ===");
+	console.log(`  size        ${union.length} of ${points.length} points (${pct(union.length, points.length)})`);
+	console.log(
+		`  balance     nudge ${unionLabels.filter((l) => l === "nudge").length}  flag ${unionLabels.filter((l) => l === "flag").length}  leave ${unionLabels.filter((l) => l === "leave").length}`,
+	);
+	console.log(
+		`  precision   ${pct(unionOwed, union.length)} — the residue is ${unionOwed > union.length - unionOwed ? "mostly word-owed, so the rules select what the model should see" : "mostly leave, so they select badly"}`,
+	);
+	console.log("  not written as a task set: the content label above is not a label-to-op mapping, and inventing a third one to score models on would be a different job");
+}
+
 function main(): void {
 	const windowArg = process.argv.find((arg) => arg.startsWith("--window="));
 	const windowMs = windowArg ? Number(windowArg.split("=")[1]) : 60_000;
@@ -128,7 +224,9 @@ function main(): void {
 	}
 
 	const byId = new Map(firings.map((firing) => [firing.point.sessionId + ":" + firing.point.seq, firing]));
+	if (process.argv.includes("--idle")) idleReport(points, new Set(byId.keys()), windowMs);
 	const firedScorable = scorable.filter((point) => byId.has(point.sessionId + ":" + point.seq));
+	const firedKeys = new Set(firings.map((firing) => firing.point.sessionId + ":" + firing.point.seq));
 
 	// The label × firing cross-tab, over the scorable rows.
 	const owed = (label: Label): boolean => RESIDUE_LABEL_TO_OP[label] !== "leave";

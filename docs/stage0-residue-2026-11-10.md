@@ -241,20 +241,137 @@ directory, which is the attribution rule doing what it was designed to do and al
 the rules' live firing rate is dominated by whatever daemon happens to be running. And the model
 flagged 16 of 17, which is the same prior toward action that cost it on the corpus.
 
+## The idle rule (second pass)
+
+The first pass's conclusion was precise and useless: the seven rules see 2.7 % of the turns that owed
+a word, because they detect a runaway *process* and the corpus is overwhelmingly a pane that has
+*stopped*. So the missing rule is the pane-level one — **an agent that finished a turn and has taken
+no input for N ticks** — and `N` comes from the timestamps, not from taste.
+
+### N, and where it comes from
+
+On the fit half of the sessions (every other session by a hash of its id, so the split does not
+depend on file order and stays fixed if the corpus grows), the operator's reply latency after a turn
+end is:
+
+```
+n = 561 replies    p25 0.13   p50 1.38   p75 6.07   p90 61.28   (minutes)
+```
+
+**Half of all replies arrive inside 1.38 minutes.** So the first whole tick at which a reply has
+stopped being the likely next event is the **second**, and that is `IDLE_TICKS = 2` in
+`src/watchdog/needs-a-word.ts`. The rule was picked from that distribution alone — no label was
+consulted, and nothing was re-picked after the numbers came in. The rule is a clock, and the corpus
+supplies the clock directly: a row's `gapMs` is exactly "how long was the human away".
+
+N is a *tick* count rather than a duration because that is how the supervisor experiences time
+(`AGENTFLEET_INTERVAL_MS`, and `idleTicks` on every mark), and at the default 60 s interval two ticks
+is two minutes.
+
+### Fire rate, precision and coverage, before and after
+
+| | before (process rules) | after (process ∪ idle) |
+|---|---|---|
+| fire rate, all turns | 2.5 % (34/1,363) | **54.1 % (738/1,363)** |
+| precision — was the pane actually blocked? | 54.2 % (13/24) | **62.9 %** |
+| coverage — of turns that owed a word, how many the rule sees | 2.7 % (13/483) | **41.6 %** (held out) |
+| label mix among fired rows | `leave` 11 / `nudge` 13 | `nudge` 464 / `leave` 274 / `flag` 0 |
+
+The idle rule alone, measured on both halves so the held-out number is the one to quote:
+
+| | fit | held out |
+|---|---|---|
+| fire rate | 53.1 % (366/689) | 53.1 % (358/674) |
+| label mix among fired | `nudge` 230 / `leave` 136 | `nudge` 220 / `leave` 138 |
+| precision | 62.8 % | **61.5 %** |
+| coverage of owed words | 42.3 % (230/544) | **41.6 %** (220/529) |
+
+Fit and held out differ by 1.3 points of precision and 0.7 of coverage, which is what a rule chosen
+from a distribution rather than from the score looks like.
+
+### The same definitions, and why they cannot judge this rule
+
+Scored on pass 1's label — "did a human speak inside the 60 s window after the turn ended" — the idle
+rule is **0 % precise and 0 % recall**, on both halves. That is not a bug and not a bad rule: the
+rule fires only on turns whose window expired with nobody speaking, so its evidence *is* the
+complement of the label's, one tick later. A rule that fires after the label's window cannot be
+scored by the label's window; the number is reported here so that the tautology is visible rather
+than described.
+
+The label that fits the firing instant is the human's **eventual** message, and the corpus supplies
+it on every quiet row (`nextLabel`). An intervention means the pane was blocked; a halt would mean a
+human was needed; no message at all means nobody ever came back. Timing selects the rows, content
+judges them.
+
+### What that precision actually is
+
+62.9 % is an average of two very different populations, and the split is the finding:
+
+| how long the human was away, on fired rows | rows | precision |
+|---|---|---|
+| 2–10 min | 236 | **98.3 %** |
+| 10 min – 1 h | 118 | 94.1 % |
+| 1–6 h | 63 | 95.2 % |
+| > 6 h | 49 | 95.9 % |
+| **never came back** | **258** | **0 %** (by construction) |
+
+So the rule's errors are **entirely** the panes nobody ever came back to — 258 of 724 firings, 36 %.
+On the panes still in a live conversation it is right about 95 % of the time.
+
+But that 95 % is weaker evidence than it looks, and the reason matters: on the mined corpus **every
+slow reply is an intervention** (of 590 quiet rows, 443 are instructions, 101 questions, 26
+continues, 20 redirects, and *zero* are halts). Any human message that arrives late says something.
+So the corpus cannot tell a blocked pane from a finished one using content — the only variation the
+label carries is "did anybody ever come back", which is a fact about the session, not about the pane.
+
+### The residue, and the question it now asks
+
+The residue stage 0 leaves — rows where a process rule fired or the pane has been idle two ticks — is
+
+```
+738 of 1,363 points (54.1%)   ·   nudge 464   leave 274   flag 0   ·   precision 62.9%
+```
+
+which passes the brief's test: the residue is **mostly word-owed**, no longer mostly `leave`. On the
+1,073 scorable rows alone it is 450 rows and 100 % `nudge` — because a scorable row is one that got a
+reply, and every slow reply is an intervention.
+
+That last number is the one to sit with. **The residue's discriminating class is exactly the class
+this corpus cannot label.** The 274 `leave` rows are the censored ones: nobody ever came back, which
+is what a finished pane looks like and also what a transcript that ended looks like. A model scored
+on the scorable residue would score 100 % by always answering `nudge`.
+
+So the honest statement of what the residue is worth: stage 0 now selects the right *moment* — a live
+pane that has gone quiet — and whether a model is worth anything *at* that moment cannot be answered
+from mined transcripts at all. It needs the observe log: a pane the supervisor left alone and which
+then never moved is the counterexample (`outcome: stalled`), and that row exists only live.
+
+### Is stage 0 a gate, or still only an alarm?
+
+**It is now a gate for attention and still not a gate for judgement.** It selects 54 % of turns and
+covers 42 % of the words that were owed — against 2.5 % and 2.7 % before — so the model is no longer
+being asked about every turn, and the population it is asked about is 63 % word-owed. What it cannot
+do is tell a pane that has finished from a pane that is stuck: its 36 % error rate is exactly that
+distinction, no rule in the table can make it, and this corpus cannot even label it. That bit is
+stage 1's, and the only corpus that can score it is the one `AGENTFLEET_OBSERVE` writes.
+
 ## What this implies
 
 1. **A finding is a sentence, never a signal.** The watchdog reports, the agent decides, the command
    keeps running. Everything below is measured under that rule and nothing in it licenses a
    terminate.
-2. **The rules are worth keeping and are not the gate.** 54.2 % precision for 2.5 % coverage is a
-   real alarm with real utility on a hung process, and no utility at all as the only condition for
-   consulting a model. `AGENTFLEET_STAGE0` stays off; the contract is in place for the day a rule
-   exists that can see a stopped pane.
-3. **The residue is the right place to measure the model, and it is too small.** 24 rows cannot
-   separate two variants that differ by one row. The way to grow it is not more thresholds: it is
-   `AGENTFLEET_OBSERVE`, running for days on the live fleet, where every stage-0 verdict and every
-   proposal is joined to what the pane did next. That corpus is the one this architecture needs, and
-   it costs a few cents a day.
+2. **The rules are worth keeping, and after the second pass they select.** 2.5 % coverage was an
+   alarm nobody could build on; the idle rule takes it to 41.6 % and the fire rate to 54 %, so stage
+   0 now picks the moment rather than waiting for a hung process. It is not wired as a live gate yet
+   — there is no `AGENTFLEET_STAGE0` switch, and stage 0's verdicts are computed and logged in
+   observe only. Wiring it is now a cost question (it would save a model call on the 46 % of turns it
+   does not select) rather than a coverage one.
+3. **The residue is big enough to score and still not scorable.** 738 rows, 63 % word-owed — but its
+   discriminating class is "finished versus stuck", and the only rows that carry that label are the
+   censored ones, where nobody ever came back. A model scored on the scorable residue would score
+   100 % by always saying `nudge`. The corpus that can score it is the one `AGENTFLEET_OBSERVE`
+   writes: every stage-0 verdict and every proposal joined to what the pane did next, for days, at a
+   few cents a day.
 4. **The trial's outcome is unchanged by this work.** The model is still under the constant on the
    full corpus and, above, on the residue. Nothing here says the idea fails; it says the fair
    test is small, and the way to make it big is to observe rather than to argue.
@@ -266,7 +383,8 @@ flagged 16 of 17, which is the same prior toward action that cost it on the corp
 
 ```sh
 node mine/time-sampled-points.ts            # 292 sessions → 1,363 points (needs the CLI cache)
-node bench/runners/stage0.ts                # rules alone + the residue task set, under mine/out
+node bench/runners/stage0.ts                # process rules alone + the residue task set
+node bench/runners/stage0.ts --idle         # the idle rule: N from the fit half, held out, residue
 node bench/runners/run.ts needle3 --limit=24 --taskset=mine/out/tasks-residue.jsonl
 node bench/runners/slate.ts --limit=24 --taskset=mine/out/tasks-residue.jsonl --report=SLATE-residue.md
 

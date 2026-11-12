@@ -1008,10 +1008,11 @@ export async function tick(deps: Deps): Promise<TickReport> {
 	// before the expensive one. A pane whose verdict speaks is where stage 1 earns its
 	// keep; a pane whose verdict is silent is recorded with the rule that permitted the
 	// silence, so "we said nothing" can be audited rather than inferred from a
-	// missing row. `AGENTFLEET_STAGE0` decides whether this gates the model or only
-	// describes the fleet — off by default, because the mined corpus measures the
-	// rules at 71 % precision and 5 % recall (docs/stage0-residue-2026-11-10.md), which
-	// makes them a fine alarm and a poor gate.
+	// missing row. This describes the fleet; it gates nothing. There is no stage-0
+	// switch in the tick and no branch below that consults `speaking`, because the rules
+	// were measured at 41.6 % coverage and 61.5 % precision
+	// (docs/stage0-residue-2026-11-10.md) and turning them into the model's gate is a
+	// decision that needs the cost answer, not a default.
 	report.stage0Panes = agents.length;
 	const speaking = new Set<string>();
 	// Every pane as stage 0 sees it: the attributes it needs and nothing else. Built
