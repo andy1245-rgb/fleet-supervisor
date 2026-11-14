@@ -145,7 +145,8 @@ processes rather than a fleet that is thinking, and the two want different rules
 stayed quiet and the pane did not move anyway" — the number that decides whether a nudge is ever
 worth sending; then `tick.costUsd` per day against the two-to-ten-cents estimate above, which is the
 check that the interval and the fleet size are what you think they are. The point at which there are
-enough rows to score stage 1 honestly is **350 judged rows of the minority outcome class**, which is
+enough rows to score stage 1 honestly is **350 judged rows in total, about 130 of them the minority
+class**, which is
 ±5 points at 95 % confidence around a 63/37 split — and the honest caveat is that observe can only
 label the silent side: a pane that moves after the supervisor stayed quiet is a nudge that was not
 needed, and a pane that stays still is genuinely ambiguous between finished and stuck, because
