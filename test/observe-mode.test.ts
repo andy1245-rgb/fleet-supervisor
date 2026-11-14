@@ -39,13 +39,14 @@ function recorder(): Recorder {
 	};
 }
 
-function port(prompts: string[]): HerdrPort {
+function port(prompts: string[], cwd = CWD): HerdrPort {
+	const agents = [agent("p1", { status: "idle", completionSeq: 2, cwd, foregroundCwd: cwd })];
 	return {
 		async list(): Promise<HerdrAgent[]> {
-			return [...AGENTS];
+			return [...agents];
 		},
 		async get(paneId: string): Promise<HerdrAgent | undefined> {
-			return AGENTS.find((entry) => entry.paneId === paneId);
+			return agents.find((entry) => entry.paneId === paneId);
 		},
 		async read(): Promise<string> {
 			return "$ npm test\nok 187 tests";
@@ -145,11 +146,11 @@ async function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
 	}
 }
 
-async function run(dir: string, reply: Decision, overrides: Partial<Config> = {}): Promise<{ report: TickReport; prompts: string[]; channel: Recorder }> {
+async function run(dir: string, reply: Decision, overrides: Partial<Config> = {}, cwd = CWD): Promise<{ report: TickReport; prompts: string[]; channel: Recorder }> {
 	const prompts: string[] = [];
 	const channel = recorder();
 	const report = await tick({
-		port: port(prompts),
+		port: port(prompts, cwd),
 		notifier: channel.notifier,
 		config: config(dir, overrides),
 		models: { primary: model("primary", reply), escalator: model("escalator", reply) },
@@ -271,15 +272,26 @@ test("the idle-turn rule is reachable from a tick: silence accumulates until it 
 		// did not change, so the third observe tick is where an idle pane crosses
 		// IDLE_TICKS. A rule that exists but is never handed a clock is a rule that
 		// never fires in the system; this is the test that would catch that.
-		const { IDLE_TICKS, IDLE_RULE } = await import("../src/watchdog/needs-a-word.ts");
-		const seen: Array<{ rule: string; speak: boolean }> = [];
-		for (let i = 0; i < IDLE_TICKS + 1; i += 1) {
-			await run(dir, decision({ op: "leave", argument: "on track" }));
-			const verdicts = rows(dir).filter((row) => row.kind === "stage0");
-			const last = verdicts[verdicts.length - 1];
-			if (last) seen.push({ rule: String(last.rule), speak: last.speak === true });
+		//
+		// The pane works in a fresh empty directory rather than the repository, because
+		// stage 0 attributes processes by working directory and a test that ran in this
+		// tree would be judged on whatever long-lived process happened to be building
+		// or ticking there — a process finding outranks the clock, by design, so the
+		// idle rule would be masked by the machine's own state instead of tested.
+		const quiet = mkdtempSync(join(tmpdir(), "agentfleet-quiet-"));
+		try {
+			const { IDLE_TICKS, IDLE_RULE } = await import("../src/watchdog/needs-a-word.ts");
+			const seen: Array<{ rule: string; speak: boolean }> = [];
+			for (let i = 0; i < IDLE_TICKS + 1; i += 1) {
+				await run(dir, decision({ op: "leave", argument: "on track" }), {}, quiet);
+				const verdicts = rows(dir).filter((row) => row.kind === "stage0");
+				const last = verdicts[verdicts.length - 1];
+				if (last) seen.push({ rule: String(last.rule), speak: last.speak === true });
+			}
+			const fired = seen.filter((entry) => entry.rule === IDLE_RULE && entry.speak);
+			assert.ok(fired.length > 0, `no idle-turn verdict across ${IDLE_TICKS + 1} ticks: ${JSON.stringify(seen)}`);
+		} finally {
+			rmSync(quiet, { recursive: true, force: true });
 		}
-		const fired = seen.filter((entry) => entry.rule === IDLE_RULE && entry.speak);
-		assert.ok(fired.length > 0, `no idle-turn verdict across ${IDLE_TICKS + 1} ticks: ${JSON.stringify(seen)}`);
 	});
 });
