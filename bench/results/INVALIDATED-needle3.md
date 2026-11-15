@@ -1,5 +1,8 @@
 # Invalidated needle3 records — 2026-11-14
 
+> The trial these records belong to is **closed**: read `bench/results/NEEDLE3-CLOSED.md` first. This
+> file is the list of what the closing record invalidates.
+
 Every `needle3` record in `bench/results/` was produced by an adapter that was mis-configured in at
 least two independent ways, and every `slate` record by a bridge with the same decode budget. **None
 of them measures the model.** They stay in the tree as history — a record is what was measured — but

@@ -12,7 +12,18 @@ The decision step runs on `commandcode/deepseek/deepseek-v4.1-flash`, the model 
 
 The local engine and its fine-tune are off the hot path. `needle.ts`, the ladder and every artefact under `finetune/out/` remain in the tree until phase 8 removes them.
 
+**What the ladder is now: retired from the hot path, kept in the repository.** The reason in one line: with the adapter finally used correctly, `needle3` proposes `flag` at a confidence of about 0.005 and the engine withholds it — a **task-framing** failure, not a decoding one, so no amount of harness work fixes it and no record before 2026-11-15 measures the model at all. The closure is `bench/results/NEEDLE3-CLOSED.md`; the invalidated records are listed one by one in `bench/results/INVALIDATED-needle3.md`. `AGENTFLEET_PRIMARY=needle3` still selects it for anyone who wants to re-open the question.
+
 ### The pre-filter, as measured
+
+> **The `needle3` numbers in this section predate the trial's closure and most of them are invalid as
+> measurements of the model.** Four adapter faults — a 96-token decode budget shorter than the
+> prompt's reasoning, the system prompt in the query instead of the static prefix, the withheld
+> proposal discarded, and a 30 s deadline below the engine's own latency — were fixed on 2026-11-15.
+> Read `bench/results/NEEDLE3-CLOSED.md` for the verdict and the corrected run, and
+> `bench/results/INVALIDATED-needle3.md` for which records say what. What survives here is the
+> *harness* history: the double-decode, the starved window, the strided sampler. What does not
+> survive is any claim about what the engine can decide.
 
 A Tier-0 pre-filter was built: a 20-layer, 121M-parameter local engine (`needle3`) asked to pick one of four ops per moved pane — `leave`, `nudge`, `declare_done`, `flag` — so the expensive model would only be paid for the panes the cheap one refuses. Alongside it, a four-variant LoRA fine-tune slate (`d4` / `d8` / `d20` / `triage`) plus `control-d8`, a base checkpoint sliced to 8 layers with no adapter.
 
@@ -103,6 +114,8 @@ So stage 0 is now a gate for *attention* and still not a gate for *judgement*: i
 **There is exactly one component that mutates a pane.** Every would-be action — a decision's, and an inspector's proposal — is a `Decision` handed to the gate in `src/manager/tick.ts`, which either performs it through `src/herdr` or parks it in `<state>/asks.jsonl`. Nothing else calls `agent prompt`, so "this action was authorised" has one implementation and one audit trail. `leave` is not an action and is never gated. `flag` is deliberately not gated: holding it would mean holding a notification, which is the thing `flag` already is.
 
 ## The escalation ladder, and why it is the cost centre
+
+The ladder is **retired from the hot path and kept in the repository**. The decision step is one hosted model (`commandcode/deepseek/deepseek-v4.1-flash`) with one optional escalation, and the local tier-0 engine that was to sit in front of it is not on any path a tick takes: `AGENTFLEET_PRIMARY=needle3` must be set to put it back. The one-line reason a future reader needs: **with the adapter finally used correctly, `needle3` proposes `flag` at confidence ~0.005 and the engine withholds it — the failure is the task framing, not the decode** (`bench/results/NEEDLE3-CLOSED.md`). Everything below describes the ladder as it is implemented and tested, which is why it is still worth reading.
 
 | tier | when | what it costs |
 |---|---|---|
