@@ -45,6 +45,13 @@ export interface Decision {
 	 *  was overruled; a refusal with `suppressed === 0` is a decode that produced
 	 *  nothing. Only the second is a fine-tuning problem. */
 	suppressed?: number;
+	/** The withheld call itself, when there was one. The engine declines to commit a
+	 *  call below its confidence bar and reports it in `suppressed_calls`; the engine's
+	 *  own `extract()` treats that as the answer. A supervisor still must not act on
+	 *  it — `refused` stays true — but the record should be able to say *which* op was
+	 *  proposed and at what confidence, because "the engine considered `flag`" and "the
+	 *  model said nothing" are different facts about the model. */
+	proposed?: { op: Op; argument: string };
 }
 
 export interface DecisionModel {

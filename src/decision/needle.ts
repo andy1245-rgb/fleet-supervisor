@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderInput, SYSTEM } from "./prompt.ts";
-import { isOp, parseDecision, type Decision, type DecisionInput, type DecisionModel } from "./types.ts";
+import { isOp, parseDecision, type Decision, type DecisionInput, type DecisionModel, type Op } from "./types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SIDECAR = join(HERE, "needle_sidecar.py");
@@ -27,8 +27,21 @@ interface SidecarReply {
 	confidence?: unknown;
 	refused?: unknown;
 	latency_ms?: unknown;
+	/** Count of calls the engine declined to commit. */
 	suppressed?: unknown;
+	/** The first such call, when there was one: the model's proposal that the
+	 *  engine's confidence bar withheld. A fact about the model, not an answer. */
+	proposed?: unknown;
 	reasoning?: unknown;
+	/** `call` or an answer type; the engine names its own turn. */
+	type?: unknown;
+	/** Argument paths the engine flagged as ungrounded, when it did. */
+	validation?: unknown;
+	/** The decode's own telemetry: success, error, error_code, decode_tps, … */
+	diagnostics?: unknown;
+	/** How many times this sidecar rebuilt the engine because the system text
+	 *  changed. Non-zero means something above is asking a different question. */
+	rebinds?: unknown;
 	error?: unknown;
 }
 
@@ -42,6 +55,17 @@ export interface NeedleOptions {
 	 *  weights resident between the ticks of a supervisor that asks once a minute. */
 	idleMs?: number;
 }
+
+/** How long one decode may take before the sidecar is presumed wedged.
+ *
+ *  This was 30 s, and 30 s was below the engine's own latency: measured on this box,
+ *  a 320-token decode at load 18–40 took 87–277 s (205 s for one row of the residue),
+ *  so the deadline fired first and the record written was a statement about the
+ *  deadline. An idle machine runs the same decision in ~12 s. 300 s is above every
+ *  decode measured here and still bounds a genuinely wedged child; callers that want
+ *  a tighter cap pass one (`AGENTFLEET_DECISION_TIMEOUT_MS`, or the bench's
+ *  `--timeout-ms`). */
+export const DEFAULT_NEEDLE_TIMEOUT_MS = 300_000;
 
 /** A stdio pipe is a socket at runtime and keeps the loop alive on its own, so
  *  unref'ing the child alone still leaves the host waiting on a reader that never
@@ -262,12 +286,22 @@ class Sidecar {
 	}
 }
 
+/** A withheld call, as a typed proposal. `undefined` when the engine withheld
+ *  nothing — which is the ordinary case, and is why the field is optional rather
+ *  than an empty object that would read as "proposed nothing". */
+function toProposal(value: unknown): { op: Op; argument: string } | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const bag = value as { op?: unknown; argument?: unknown };
+	if (!isOp(bag.op)) return undefined;
+	return { op: bag.op, argument: typeof bag.argument === "string" ? bag.argument : "" };
+}
+
 export function needleModel(options: NeedleOptions = {}): DecisionModel {
 	const python = options.pythonPath ?? process.env.NEEDLE_PYTHON ?? DEFAULT_PYTHON;
 	if (!existsSync(python)) {
 		throw new Error(`needle python not found at ${python} — create the venv or set NEEDLE_PYTHON`);
 	}
-	const sidecar = new Sidecar(python, options.timeoutMs ?? 30_000, options.idleMs ?? 2_000);
+	const sidecar = new Sidecar(python, options.timeoutMs ?? DEFAULT_NEEDLE_TIMEOUT_MS, options.idleMs ?? 2_000);
 
 	return {
 		name: "needle3",
@@ -297,7 +331,23 @@ export function needleModel(options: NeedleOptions = {}): DecisionModel {
 			const argument = typeof reply.argument === "string" ? reply.argument : "";
 			const latencyMs = typeof reply.latency_ms === "number" ? reply.latency_ms : Date.now() - started;
 			const suppressed = typeof reply.suppressed === "number" ? reply.suppressed : undefined;
-			const raw = JSON.stringify({ op: reply.op, argument, confidence, suppressed, reasoning: reply.reasoning });
+			const proposed = toProposal(reply.proposed);
+			// Everything the engine said about the turn travels with the decision: the
+			// withheld proposal, the ungrounded paths, the turn type and the decode's own
+			// telemetry. It used to be reduced to a count, which is why "the engine
+			// proposed `flag` and withheld it" was indistinguishable from "the model said
+			// nothing" for as long as the records have existed.
+			const raw = JSON.stringify({
+				op: reply.op,
+				argument,
+				confidence,
+				suppressed,
+				proposed,
+				reasoning: reply.reasoning,
+				type: reply.type,
+				validation: reply.validation,
+				diagnostics: reply.diagnostics,
+			});
 
 			if (!op) {
 				return {
@@ -310,9 +360,10 @@ export function needleModel(options: NeedleOptions = {}): DecisionModel {
 					refused: true,
 					raw,
 					suppressed,
+					...(proposed === undefined ? {} : { proposed }),
 				};
 			}
-			return { op, argument, confidence, model: "needle3", costUsd: 0, latencyMs, refused: false, raw, suppressed };
+			return { op, argument, confidence, model: "needle3", costUsd: 0, latencyMs, refused: false, raw, suppressed, ...(proposed === undefined ? {} : { proposed }) };
 		},
 
 		close(): void {

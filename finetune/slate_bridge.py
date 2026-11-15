@@ -32,7 +32,12 @@ def parse_args(argv):
 	                         "only, so a scope variant cannot emit a class it was not trained on")
 	parser.add_argument("--tasks", required=True, help="JSONL of {id, query} from the harness")
 	parser.add_argument("--out", required=True, help="JSONL of one decision per task")
-	parser.add_argument("--max-new-tokens", type=int, default=96)
+	# 320, not 96: measured on the base engine, 96 tokens is shorter than this
+	# prompt's reasoning preamble, so the reasoning is truncated and no call is
+	# emitted at all. Every slate record written before 2026-11-14 used 96 and is
+	# therefore invalid as a measurement of the variant (see
+	# docs/needle3-usage-review-2026-11-14.md and bench/results/INVALIDATED-needle3.md).
+	parser.add_argument("--max-new-tokens", type=int, default=320)
 	parser.add_argument("--tools-style", choices=("train", "sidecar"), default="train")
 	parser.add_argument("--warmup", action="store_true", default=True,
 	                    help="Paying engine load and prefill on the first task would otherwise be "
@@ -76,6 +81,17 @@ def call(agent, query, max_new_tokens):
 		        "latencyMs": int((time.time() - started) * 1000)}
 	calls = response.get("function_calls") or []
 	suppressed = response.get("suppressed_calls") or []
+	# The call the engine declined to commit. Recorded because "the variant proposed
+	# X at confidence 0.004" and "the variant said nothing" are different facts, and
+	# the record used to keep only a count of the first.
+	withheld = suppressed[0] if suppressed and isinstance(suppressed[0], dict) else None
+	proposed = None
+	if withheld is not None:
+		withheld_args = withheld.get("arguments")
+		proposed = {
+			"op": withheld.get("name"),
+			"argument": str(next(iter(withheld_args.values()), "")) if isinstance(withheld_args, dict) else "",
+		}
 	name = None
 	argument = ""
 	if calls and isinstance(calls[0], dict):
@@ -88,7 +104,7 @@ def call(agent, query, max_new_tokens):
 	confidence = response.get("confidence")
 	return {"op": name, "argument": argument,
 	        "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
-	        "refused": name is None, "suppressed": len(suppressed),
+	        "refused": name is None, "suppressed": len(suppressed), "proposed": proposed,
 	        "reasoning": str(response.get("reasoning") or ""), "error": None,
 	        "latencyMs": int((time.time() - started) * 1000)}
 

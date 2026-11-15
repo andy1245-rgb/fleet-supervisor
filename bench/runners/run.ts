@@ -441,10 +441,16 @@ export interface TaskTrace {
 	costUsd: number;
 	model: string;
 	argument: string;
-	/** Calls the engine's grounding gate withheld. This is the field that separates
-	 *  "grounding suppressed a proposal" from "decoding produced nothing", and the
-	 *  two have opposite fixes: the first needs no fine-tune at all. */
+	/** Calls the engine withhold. This is the field that separates "the engine
+	 *  considered a call and declined to commit it" from "decoding produced
+	 *  nothing", and the two have opposite fixes: the first needs no fine-tune at
+	 *  all. (It was documented as the grounding gate; measured, it is the confidence
+	 *  bar — see docs/needle3-usage-review-2026-11-14.md.) */
 	suppressed?: number;
+	/** The withheld call, when there was one: which op the engine considered and at
+	 *  what confidence. Present exactly when `suppressed > 0` on an engine that
+	 *  reports it, so a refusal stops being indistinguishable from silence. */
+	proposed?: { op: Op; argument: string };
 	/** The sidecar's reply, verbatim. Without it a trace cannot be re-scored after
 	 *  the scoring rules change, which is how a refusal became a `flag`. */
 	raw?: string;
@@ -466,6 +472,7 @@ export function traceOf(tasks: readonly Task[], decisions: readonly Decision[]):
 			model: decision.model,
 			argument: decision.argument,
 			...(typeof decision.suppressed === "number" ? { suppressed: decision.suppressed } : {}),
+			...(decision.proposed === undefined ? {} : { proposed: decision.proposed }),
 			raw: decision.raw,
 		});
 	}
