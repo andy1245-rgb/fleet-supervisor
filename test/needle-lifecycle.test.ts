@@ -240,11 +240,16 @@ test("a timed-out request kills the wedged child and the next decision respawns"
 	writeFileSync(stall, "");
 	process.env.NEEDLE_STUB_TRACE = trace;
 	process.env.NEEDLE_STUB_STALL = stall;
-	const model = needleModel({ pythonPath: python, timeoutMs: 200, idleMs: 60_000 });
+	// 2 s, not 200 ms: the deadline has to cover a process spawn before it covers a
+	// decode. At 200 ms on a loaded box the interpreter sometimes records its pid
+	// after the timeout has already fired, and the test then fails on its own setup
+	// rather than on the behaviour it is about (the stub stalls until the file below
+	// is removed, so two seconds still tests the deadline).
+	const model = needleModel({ pythonPath: python, timeoutMs: 2_000, idleMs: 60_000 });
 	try {
 		const timedOut = await model.decide(INPUT);
 		assert.equal(timedOut.refused, true, "a timeout is a refusal, never an op");
-		assert.equal(timedOut.argument, "sidecar error: needle timeout after 200ms");
+		assert.equal(timedOut.argument, "sidecar error: needle timeout after 2000ms");
 		const dead = latestPid(trace);
 		assert.equal(await waitForDeath(dead), true, "the wedged child must be killed, not reused");
 
