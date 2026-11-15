@@ -55,11 +55,22 @@ Two consequences worth stating rather than leaving implicit:
 
 ## What is valid
 
-Nothing in the tree yet. The first record produced by the corrected adapter — system prompt in the
-static prefix, 320-token decode budget, withheld proposals and the engine's diagnostics carried onto
-the decision, a deadline above the engine's measured latency — supersedes the list above and is the
-only needle3 number to cite. It is written under the same `bench/results/` convention and cites its
-task-set sha like every other record.
+**`2026-11-15T09-52-19-800Z__needle3.json`** — the first record from the corrected adapter (system
+prompt in the static prefix, 320-token decode budget, withheld proposals and the engine's diagnostics
+carried onto the row, a deadline above the engine's measured latency). It is the only needle3 record
+to cite. Task set `bench/tasks/2026-11-11.5107ea0a31d02527.jsonl` (the residue, n = 24).
+
+What it shows, and it is the same verdict reached honestly: **0 of 24 committed, 20 of 24 with a
+proposal the engine withheld (`flag` 14, `nudge` 2, `declare_done` 2, `leave` 2), 4 truncated
+(`error_code: "truncated"`), confidence p50 0.0053, and 3 of 24 correct if every withheld proposal
+were taken as the answer against a 54.2 % constant.** The usage fix made the failure legible; it did
+not make the engine pass. Its latency columns are unusable — the host suspended mid-run — and the
+record says so in its own `notes`.
+
+The 502-row task set the older records cite has not been re-run under the corrected adapter: at a
+p50 of 54 s a row that is ~7.5 hours of median time with a multi-hour tail. Until it is,
+`2026-10-26.b9765d1a55e18b4e` has **no valid needle3 measurement at all**, and the older records
+remain exactly what they are — history, not evidence.
 
 ## The one caveat the correction introduces
 

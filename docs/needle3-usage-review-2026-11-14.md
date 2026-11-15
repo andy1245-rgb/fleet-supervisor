@@ -115,6 +115,49 @@ That is the fair test, and it is worth being precise about what it settles:
   from runs that were mis-configured four ways; now the same verdict is reached from a run that is
   configured correctly. Both statements are true at once, and only the second is evidence.
 
+## The corrected run
+
+All four faults fixed, then the same frozen task set re-run: `bench/results/2026-11-15T09-52-19-800Z__needle3.json`,
+task-set sha `5107ea0a31d02527` (the residue, n = 24 — the same set the two most recent superseded
+records used), system prompt in the static prefix, 320-token budget, withheld calls and diagnostics
+carried onto the row.
+
+| | |
+|---|---|
+| committed ops | **0 of 24** (all refused; `usableOutputRate` 0) |
+| rows where the engine proposed an op and withheld it | **20 of 24** — `flag` 14, `nudge` 2, `declare_done` 2, `leave` 2 |
+| rows that produced neither a call nor a proposal | 4 — and the engine says why: `success: false, error_code: "truncated"` |
+| confidence on its own answers | p25 0.0043 · **p50 0.0053** · p75 0.0118 · max 0.0605 (p50 0.0070 on the rows that proposed something) |
+| confidence reported as zero | none — the engine always answered with a number, and the number is ~0.005 |
+| if every withheld proposal were taken as the answer | **3 of 24 = 12.5 %**, against the residue's `always nudge` constant of 54.2 % |
+| latency | p50 54 s · p95 264 s · max 11,868 s |
+
+**The answer to the operator's question, plainly: the engine still fails the task.** Twenty-four of
+twenty-four decisions were refused, the proposals it did make are wrong three times out of four
+against a constant, and the confidence it attaches to them is five thousandths. Fixing the usage did
+not rescue it.
+
+**What the fix did change is that the failure is now legible.** Before, all 24 rows read "produced
+nothing" and there was no way to tell a declining model from a wedged one. Now the record shows which
+op the engine considered (`flag`, mostly — the same prior toward "a human should look" as every
+earlier run), at what confidence, and, on the four rows that genuinely ran out of room, the engine's
+own `error_code: "truncated"` — a field this adapter discarded until today.
+
+Two caveats on the numbers above, both recorded rather than smoothed over:
+
+- **The latency columns are not usable.** The host suspended at 01:21 (systemd-logind, 2026-11-15)
+  while a row was in flight, so the 11,868 s max is a suspend, not a decode. The record's own `notes`
+  field already says the raised cap makes latency non-comparable; the p50 of 54 s is the only figure
+  worth reading, and on a quiet box the same decision is ~12 s.
+- **Four rows still truncate at 320 tokens.** The window is the binding constraint: 331-token prefix
+  + ~330 state block + 320 = 981 of 1024. Giving the reasoning more room means shrinking the tail
+  (`MAX_TAIL_CHARS`, 700 today), not raising the budget — a lever nobody has pulled.
+
+The 502-row task set the older records cite was not re-run: at a p50 of 54 s a row it is ~7.5 hours of
+median time with a multi-hour tail, and the residue is the set that measures the question this
+architecture asks. When the box is quiet, `node bench/runners/run.ts needle3 --limit=22
+--taskset=bench/tasks/2026-10-26.b9765d1a55e18b4e.jsonl` re-measures the superseded 22-row records on
+their own rows.
 ## What is not a bug
 
 - **Tool schema shape.** `@needle.tool` with type hints and a docstring is the engine's own
