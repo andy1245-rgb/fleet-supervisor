@@ -48,3 +48,7 @@ bench/results/*.traces.jsonl
 # copies are session text, so the directory is ignored even though it sits inside
 # the records tree (docs/CORPUS-POLICY.md §1).
 bench/results/.slate-scratch/
+
+# Editor and manual backups: never published.
+*.bak
+*.bak-*
