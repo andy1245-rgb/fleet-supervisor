@@ -26,8 +26,8 @@ fleet tick: 50 agents, 50 moved, 50 decisions, 39/50 spoke, 0 triggers, 0 inspec
 
 `39/50 spoke` is stage 0 speaking, and its silences are logged beside the rule that allowed them.
 Per pane a verdict is `{ speak: false, rule: "idle-shell" }` or `{ speak: true, rule: "idle-turn", why: … }`,
-carrying the sentence a human would be shown. `50 decisions` is one model call per moved pane, and
-`0 prompts · 0 held` is observe mode's promise: nothing leaves the process.
+carrying the sentence a human would be shown. `50 decisions` is one model call per moved pane;
+`0 prompts · 0 held` is observe mode's promise.
 
 ## The measured result
 
@@ -42,17 +42,17 @@ from one that is **stuck**:
 | of the turns that owed a word, how many it sees | 2.7% (13 of 483) | **41.6% (220 of 529, held out)** |
 | of the turns it speaks on, how many owed a word | 54.2% (13 of 24) | **62.9%** |
 
-The process rules detect a runaway *process*; the corpus is overwhelmingly a pane that has *stopped*,
-which is why they saw 2.7% of the words owed. The eighth rule is the pane-level one — `idle-turn`: an
-agent that finished a turn and has taken no input for `IDLE_TICKS` — with `N = 2` taken from the
-reply-latency distribution rather than from taste (half of all replies arrive inside 1.38 minutes, so
-the second tick; on the held-out half it scores 61.5% precision).
+The process rules detect a runaway *process*; the corpus is overwhelmingly a pane that has *stopped*.
+The eighth rule is the pane-level one — `idle-turn`: an agent that finished a turn and has taken no
+input for `IDLE_TICKS` — with `N = 2` taken from the reply-latency distribution, not from taste (half
+of all replies arrive inside 1.38 minutes, so the second tick; held out, it scores 61.5% precision).
 
 That 54.1% is a corpus number and does not transfer: on the live fleet the same rules spoke on
 **88.9% of 68,898 verdicts**, dominated by `command` (71%) rather than `idle-turn` (18%), so a gate
-calibrated on the corpus is calibrated for the wrong fleet. Record:
-[docs/stage0-residue-2026-11-10.md](docs/stage0-residue-2026-11-10.md) — 1,363 decision points, 1,073
-scorable, 292 sessions, a 60-second window.
+calibrated on the corpus is calibrated for the wrong fleet. The corpus figures are
+[docs/stage0-residue-2026-11-10.md](docs/stage0-residue-2026-11-10.md) (1,363 decision points, 1,073
+scorable, 292 sessions); the live ones are the observe stream in
+[docs/headtohead-2026-11-24.md](docs/headtohead-2026-11-24.md).
 
 ## A local decision model was tried, and retired
 
@@ -71,26 +71,51 @@ a task-framing failure, not a decoding one
 | confidence on its own answers | p50 **0.0053**, and never once zero |
 | if every withheld proposal were taken as its answer | 3 of 24 = **12.5%**, against a constant that always says `nudge` at **54.2%** |
 
-It was then re-tried in its strongest framing — stage 0 picking the moment, the model choosing the
-word only on rows stage 0 had already selected, so it was never asked about a pane that needed
-nothing. On the same evidence, labels and split it committed an op on **0 of 24** rows, proposed a
-word on 18, was wrong about *which* word 85% of the time, and carried an 81.8% false-positive rate on
-the rows where nothing was owed. Against it ran five cheap anomaly detectors — per-task-type duration
-baselines, three identical calls in one turn, an edit with no test run, an unanswered ask, a vanished
-process — firing on 3.6% of 674 held-out turns, never on a quiet one, at no cost
-([docs/headtohead-2026-11-24.md](docs/headtohead-2026-11-24.md)). Its recall is 4.5%, and the record
-says so: it replaces silence with a rare alarm a human can trust, which is what a first gate is for.
-
 Four adapter faults were found and fixed before the verdict: a decode budget shorter than the
 reasoning, the system prompt passed in the query instead of as the static prefix, the withheld
-proposal discarded, a deadline under the engine's latency. The twelve records written under them stay
-in the tree, named as invalid one by one in
+proposal discarded, a deadline under the engine's latency. The twelve `needle3` records and five
+`slate` records written under them stay in the tree, named as invalid one by one in
 [bench/results/INVALIDATED-needle3.md](bench/results/INVALIDATED-needle3.md); the fix made the failure
 legible, not passing.
 
 What would reopen the question is written down too — serve the decision as an instruction rather than
 a state block, shrink the tail, use a checkpoint with a trained confidence head, or fine-tune on this
 corpus. None of the four is scheduled; `AGENTFLEET_PRIMARY=needle3` still selects the engine.
+
+## Two supervisors, head to head
+
+On one evidence base, one label definition and one session-hash split, `node bench/runners/headtohead.ts`
+scores two arms: **the decision model at its strongest framing** — stage 0 picks the moment, the model
+picks the word on the residue, so it is never asked about a pane that needed nothing — against **five
+cheap anomaly detectors** that need no model and no labels: a duration past its task type's p99, three
+identical calls in one turn, an edit with no test run, an unanswered ask, a vanished process.
+
+Only the first three of those five are computable from a transcript; the last two are pane state and
+are not in this table at all. The detectors are scored on 674 held-out turns and the model on the
+24-row residue stage 0 had already selected, so the two blocks have different denominators:
+
+| arm | fires on | precision | recall | false-positive rate |
+|---|---|---|---|---|
+| detector — duration past max(p99, 60 s) | 1.0% (7 of 674) | 100% | 1.3% | **0.0%** |
+| detector — edit with no test run after it | 2.8% (19 of 674) | 100% | 3.6% | **0.0%** |
+| **detectors — the rows above, unioned** | **3.6% (24 of 674)** | **100%** | **4.5%** | **0.0% (0 of 145 quiet turns)** |
+| model — proposed a word | 75% (18 of 24) | 50% (9 of 18) | 69.2% (9 of 13) | **81.8% (9 of 11)** |
+
+Two things the detector block hides. The precision is a real lift over a 78% base rate (0.78²⁴ ≈ 0.3%
+by luck) but a lift of **24 firings**, and these are *per-turn* rates: a detector that re-fires while a
+turn is still open sees it ten or twenty times, so the tick-level false-alarm rate is many times this
+unless every detector is edge-triggered. The model bought its 69% recall the other way: it spoke on
+three residue rows in four, was right about the word 15% of the time, and committed an op on 0 of 24.
+
+4.5% recall is a precise alarm that is nearly blind, and no rival to the stage-0 numbers above: those
+are a *gate*, firing on half the turns to cover 41.6% of the words owed; these are an *alarm*, firing
+on 3.6% to be right almost every time they do. It replaces silence with a rare event a human can trust
+and will never decide what to say to a pane. Both tables, the split and the cost per tick are in
+[docs/headtohead-2026-11-24.md](docs/headtohead-2026-11-24.md) under *Arm 2, measured offline* and
+*Arm 1, on the same residue*.
+
+**The cheap detector is trustworthy and narrow, the model is neither — and a supervisor that cries
+wolf gets switched off in a day.**
 
 ## Quickstart
 
@@ -150,8 +175,12 @@ Three harnesses, all committed, all scored by code in the repository rather than
   sha, per-op recall, exact match, regret and nearest-rank latency.
 - **Live.** `AGENTFLEET_OBSERVE=1` runs the whole pipeline, writes what it *would* have done, then
   joins each decision to what the pane did next — so a pane the supervisor stayed quiet about, and
-  which then never moved, becomes a counterexample row. That join is evidence no transcript could
-  have produced: [docs/observe-protocol-2026-11-14.md](docs/observe-protocol-2026-11-14.md).
+  which then never moved, becomes a counterexample row. Observation is log-only: the log is the whole
+  output and nothing executes. That join is evidence no transcript could have produced
+  ([docs/observe-protocol-2026-11-14.md](docs/observe-protocol-2026-11-14.md)), and it has now run
+  against a live fleet — 2,059 ticks over three days, stopped on the 17th, every one of the 232
+  decisions a provider refusal, so the span records the provider failing, not the model judging. How
+  to read it: [docs/observation-running-2026-11-14.md](docs/observation-running-2026-11-14.md).
 - **The supervisor's own log** is a typed, append-only JSONL with one report over it. Rates are
   `null` rather than `0` when the denominator is empty, percentiles are nearest-rank over values that
   occurred, and a field no stage can supply honestly is named rather than written as zero:
@@ -177,8 +206,8 @@ rejected included; the register of everything wrong or unverified is
   source text, and was verified the way a guard should be: adding a `process.kill` to the watchdog
   fails it.
 - **It does not act in observe mode.** Nothing leaves the process — no prompt, no notification, no
-  parked ask, no claim file. Every would-be message is a log row, and a four-tick run records
-  `prompts 0 · held 0 · asks 0` and creates no `asks.jsonl`.
+  parked ask, no claim file: every would-be message is a log row, and a four-tick run records
+  `prompts 0 · held 0 · asks 0`.
 - **Stage 0 is not wired as a gate on a live tick.** There is no `AGENTFLEET_STAGE0`; stage 0's
   verdicts are computed and logged in observe mode only, so a live tick still asks the model about
   every pane that moved. Wiring it is a cost question, not a correctness one.

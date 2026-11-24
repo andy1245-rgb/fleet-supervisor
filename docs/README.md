@@ -19,7 +19,7 @@ became is in [`../bench/results/`](../bench/results/).
 | file | what it holds |
 |---|---|
 | [observe-protocol-2026-11-14.md](observe-protocol-2026-11-14.md) | Observe mode verified against a live fleet, the negative evidence that nothing was sent, the cost per day at the recorded per-call price, and the collection protocol. |
-| [observation-running-2026-11-14.md](observation-running-2026-11-14.md) | The operator's note for a running span: what is recording, how to read the log at the end of it, and what counts as enough labelled rows to score anything. |
+| [observation-running-2026-11-14.md](observation-running-2026-11-14.md) | The operator's note written for that span: what was recording, how to read the log at the end of it, and what counts as enough labelled rows to score anything. |
 
 ## Policy, metrics and design
 
