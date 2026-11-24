@@ -90,16 +90,23 @@ picks the word on the residue, so it is never asked about a pane that needed not
 cheap anomaly detectors** that need no model and no labels: a duration past its task type's p99, three
 identical calls in one turn, an edit with no test run, an unanswered ask, a vanished process.
 
-Only the first three of those five are computable from a transcript; the last two are pane state and
-are not in this table at all. The detectors are scored on 674 held-out turns and the model on the
-24-row residue stage 0 had already selected, so the two blocks have different denominators:
+Only the first three of those five are computable from a transcript, and they are the three detector
+rows below; the last two are pane state and are not in this table at all. The detectors are scored on
+674 held-out turns and the model on the 24-row residue stage 0 had already selected, so the two blocks
+have different denominators:
 
 | arm | fires on | precision | recall | false-positive rate |
 |---|---|---|---|---|
 | detector — duration past max(p99, 60 s) | 1.0% (7 of 674) | 100% | 1.3% | **0.0%** |
+| detector — repeat: 3 identical calls in one turn | 1.0% (7 of 674) | 100% | 1.3% | **0.0%** |
 | detector — edit with no test run after it | 2.8% (19 of 674) | 100% | 3.6% | **0.0%** |
-| **detectors — the rows above, unioned** | **3.6% (24 of 674)** | **100%** | **4.5%** | **0.0% (0 of 145 quiet turns)** |
+| **detectors — all five unioned, counting distinct turns** | **3.6% (24 of 674)** | **100%** | **4.5%** | **0.0% (0 of 145 quiet turns)** |
 | model — proposed a word | 75% (18 of 24) | 50% (9 of 18) | 69.2% (9 of 13) | **81.8% (9 of 11)** |
+
+The union row is not the sum of the rows above it. It unions **all five** detectors, the three
+above and the two pane-state ones, and it counts **distinct turns**: those three rows fire
+7 + 7 + 19 = 33 times across the 674 turns, and a firing that lands on a turn already counted does
+not add a second turn, so the union is **24 turns**.
 
 Two things the detector block hides. The precision is a real lift over a 78% base rate (0.78²⁴ ≈ 0.3%
 by luck) but a lift of **24 firings**, and these are *per-turn* rates: a detector that re-fires while a
