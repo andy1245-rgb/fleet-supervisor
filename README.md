@@ -8,8 +8,6 @@ working it decides whether a word is owed, and says so. It has no way to stop, c
 
 ## What it does
 
-One tick, five steps:
-
 |   | step | code |
 |---|---|---|
 | 1 | **Reads the fleet.** One `herdr agent list`; a pane whose completion counter did not move since the last tick is not looked at again, so a still fleet costs one list call and no model call. | `src/fleet/detect.ts` |
@@ -22,22 +20,21 @@ One observe tick against a live fleet — the whole pipeline, and nothing sent:
 
 ```console
 $ AGENTFLEET_OBSERVE=1 AGENTFLEET_ONCE=1 AGENTFLEET_STATE_DIR=.fleet-state node src/manager/tick.ts
-fleet tick: 50 agents, 50 moved, 50 decisions, 39/50 spoke, 0 triggers, 0 inspected, 1 escalated,
-            1 escalations failed, 0 prompts, 0 held, $0.014470 · no daily cap · spent $0.014470 (observe)
+fleet tick: 50 agents, 50 moved, 50 decisions, 39/50 spoke, 0 triggers, 0 inspected, 0 escalated,
+            0 escalations failed, 0 prompts, 0 held, $0.013369 · no daily cap · spent $0.013369 (observe)
 ```
 
 `39/50 spoke` is stage 0 speaking, and its silences are logged beside the rule that allowed them.
-`50 decisions` is one model call per moved pane. `0 prompts · 0 held` is observe mode's whole promise.
-Per pane a verdict is `{ speak: false, rule: "idle-shell" }` or
-`{ speak: true, rule: "idle-turn", why: … }`, carrying the sentence a human would be shown. The
-failed escalation is the absent second credential described under [Quickstart](#quickstart).
+Per pane a verdict is `{ speak: false, rule: "idle-shell" }` or `{ speak: true, rule: "idle-turn", why: … }`,
+carrying the sentence a human would be shown. `50 decisions` is one model call per moved pane, and
+`0 prompts · 0 held` is observe mode's promise: nothing leaves the process.
 
 ## The measured result
 
-Stage 0 is the settled part. On a corpus of one operator's own sessions, adding one rule that watches
-the clock instead of a process took stage 0 from speaking on 2.5% of turns to **54.1%** — and it is
-a gate for attention, not yet for judgement, because no rule in the table can tell a pane that has
-**finished** from one that is **stuck**:
+Stage 0 is the settled part. On a corpus of one operator's own sessions, one rule that watches the
+clock instead of a process took stage 0 from speaking on 2.5% of turns to **54.1%** — a gate for
+attention, not yet for judgement, because no rule in the table can tell a pane that has **finished**
+from one that is **stuck**:
 
 | | seven process rules | with the idle rule |
 |---|---|---|
@@ -46,25 +43,25 @@ a gate for attention, not yet for judgement, because no rule in the table can te
 | of the turns it speaks on, how many owed a word | 54.2% (13 of 24) | **62.9%** |
 
 The process rules detect a runaway *process*; the corpus is overwhelmingly a pane that has *stopped*,
-which is why they saw 2.7% of the words that were owed. The eighth rule is the pane-level one —
-`idle-turn`: an agent that finished a turn and has taken no input for `IDLE_TICKS` — with `N = 2`
-taken from the reply-latency distribution rather than from taste (half of all replies arrive inside
-1.38 minutes, so the second tick; on the held-out half it scores 61.5% precision).
+which is why they saw 2.7% of the words owed. The eighth rule is the pane-level one — `idle-turn`: an
+agent that finished a turn and has taken no input for `IDLE_TICKS` — with `N = 2` taken from the
+reply-latency distribution rather than from taste (half of all replies arrive inside 1.38 minutes, so
+the second tick; on the held-out half it scores 61.5% precision).
 
-That 54.1% is a corpus number and does not transfer. On the live fleet the same rules spoke on
-**88.9% of 68,898 verdicts**, and the mix was dominated by `command` (71%) rather than `idle-turn`
-(18%) — a gate calibrated on the corpus would be calibrated for the wrong fleet. Record:
-[docs/stage0-residue-2026-11-10.md](docs/stage0-residue-2026-11-10.md) (1,363 decision points,
-1,073 scorable, 292 sessions, a 60-second window).
+That 54.1% is a corpus number and does not transfer: on the live fleet the same rules spoke on
+**88.9% of 68,898 verdicts**, dominated by `command` (71%) rather than `idle-turn` (18%), so a gate
+calibrated on the corpus is calibrated for the wrong fleet. Record:
+[docs/stage0-residue-2026-11-10.md](docs/stage0-residue-2026-11-10.md) — 1,363 decision points, 1,073
+scorable, 292 sessions, a 60-second window.
 
 ## A local decision model was tried, and retired
 
 The plan was a two-tier ladder: a 121M-parameter engine at home (20 layers, the same four ops) as a
-free pre-filter, so the hosted model was paid only for the panes the engine refused. It was built,
-measured, taken off the hot path, and closed with a written verdict rather than a commit message.
+free pre-filter, so the hosted model was paid only for the panes the engine refused.
 
-**The verdict in one sentence:** used correctly, the engine proposes `flag` at a confidence of about
-five thousandths and then withholds it — a task-framing failure, not a decoding one
+**The verdict in one sentence:** built, measured, taken off the hot path and closed — because used
+correctly, the engine proposes `flag` at a confidence of about five thousandths and then withholds it;
+a task-framing failure, not a decoding one
 ([bench/results/NEEDLE3-CLOSED.md](bench/results/NEEDLE3-CLOSED.md)).
 
 | the corrected run, 24 rows | |
@@ -81,30 +78,27 @@ word on 18, was wrong about *which* word 85% of the time, and carried an 81.8% f
 the rows where nothing was owed. Against it ran five cheap anomaly detectors — per-task-type duration
 baselines, three identical calls in one turn, an edit with no test run, an unanswered ask, a vanished
 process — firing on 3.6% of 674 held-out turns, never on a quiet one, at no cost
-([docs/headtohead-2026-11-24.md](docs/headtohead-2026-11-24.md)). That arm's recall is 4.5%, and the
-record says so: it replaces silence with a rare alarm a human can trust, which is what a first gate
-should be.
+([docs/headtohead-2026-11-24.md](docs/headtohead-2026-11-24.md)). Its recall is 4.5%, and the record
+says so: it replaces silence with a rare alarm a human can trust, which is what a first gate is for.
 
-Four adapter faults were found and fixed before the verdict was written: a decode budget shorter than
-the prompt's own reasoning, the system prompt passed in the query instead of the static prefix, the
-withheld proposal discarded, and a deadline below the engine's measured latency. The twelve records
-written under those faults stay in the tree, named one by one as invalid in
-[bench/results/INVALIDATED-needle3.md](bench/results/INVALIDATED-needle3.md); none may be cited as a
-statement about the model. Fixing the adapter made the failure legible; it did not make it pass.
+Four adapter faults were found and fixed before the verdict: a decode budget shorter than the
+reasoning, the system prompt passed in the query instead of as the static prefix, the withheld
+proposal discarded, a deadline under the engine's latency. The twelve records written under them stay
+in the tree, named as invalid one by one in
+[bench/results/INVALIDATED-needle3.md](bench/results/INVALIDATED-needle3.md); the fix made the failure
+legible, not passing.
 
 What would reopen the question is written down too — serve the decision as an instruction rather than
 a state block, shrink the tail, use a checkpoint with a trained confidence head, or fine-tune on this
-corpus. None of the four is scheduled, and `AGENTFLEET_PRIMARY=needle3` still selects the engine.
+corpus. None of the four is scheduled; `AGENTFLEET_PRIMARY=needle3` still selects the engine.
 
 ## Quickstart
 
-Node 24 or newer. That is the whole requirement for everything below the next heading.
+Node 24 or newer is the whole toolchain: the tests run `.ts` files directly by type stripping.
 
 ```console
 $ npm install          # typescript + @types/node; the test suite itself needs no dependency
-$ node --version       # v24+ : the tests run .ts files directly by type stripping
 $ npm test             # 684 tests, 681 pass, 3 skipped, 0 fail
-$ npm run typecheck
 $ npm run check:corpus # the guard that keeps mined text out of a public repo
 ```
 
@@ -113,7 +107,6 @@ Four entry points that need no fleet, no pane and no model:
 ```console
 $ node ext/pi-fleet/selfcheck.ts           # drives the pi extension's handlers against a temp registry
 $ node src/metrics/report.ts --window=all  # tables from the event log; zeros when there is none
-$ node src/metrics/report.ts --help        # the report's whole query surface
 $ node bench/runners/headtohead.ts         # both supervisors side by side; writes nothing
 $ node src/watchdog/rules.ts               # reads /proc, prints every process past its allowance
 ```
@@ -121,16 +114,16 @@ $ node src/watchdog/rules.ts               # reads /proc, prints every process p
 To point it at a live fleet it needs two things it cannot invent: `herdr` on `PATH` (or
 `HERDR_BIN_PATH`), and a model credential — `COMMAND_CODE_API_KEY` for the default primary, or the
 `auth.json` in the pi agent config directory, which the adapter also reads, plus `OPENROUTER_API_KEY`
-if the escalator is to work; without it each tick reports the escalation it could not place. The
-observe tick at the top of this page is then the whole pipeline in one command. Drop
-`AGENTFLEET_OBSERVE=1` and it acts through `herdr` instead of recording; set `AGENTFLEET_DRY=1` and it
-decides without touching anything. The knobs that matter:
+if the escalator is to work; without it each tick reports the escalation it could not place. Then the
+observe tick at the top of this page is the whole pipeline in one command, and drop
+`AGENTFLEET_OBSERVE=1` to make it act through `herdr`; `AGENTFLEET_DRY=1` decides without touching
+anything. The knobs that matter:
 
 | variable | default | effect |
 |---|---|---|
 | `AGENTFLEET_INTERVAL_MS` | `60000` | tick interval. The idle rule's `N` was derived against 60 s; at any other interval two ticks is a different amount of silence and the rule stops meaning what it was measured to mean. |
 | `AGENTFLEET_ASK` | `fork` | when the gate parks an action for a human instead of performing it: `never` acts and reports after, `fork` asks on a hard fork only, `often` also asks on a soft one, `always` asks on every non-`leave` decision. |
-| `AGENTFLEET_MAX_PROMPTS` | `3` | prompts a single tick is allowed to send. |
+| `AGENTFLEET_MAX_PROMPTS` | `3` | prompts a single tick may send. |
 | `AGENTFLEET_DAILY_COST_CAP_USD` | unset | the day's spend at or above which a tick makes no model call. Unset means no cap; spend is recorded either way. |
 | `AGENTFLEET_INSPECTOR` | `cheap` | the cross-agent tier: `off` announces a trigger and stops, `cheap` asks the escalator over a bounded brief, `deep` gives one child 120 s. |
 | `AGENTFLEET_STATE_DIR` | `.pi/agent/fleet-state` under your home | where state lives: `events.jsonl`, `marks.json`, `pending.json`, `asks.jsonl`, `policy.json`. |
@@ -147,33 +140,33 @@ $ node src/manager/answer.ts <id> no             # discard it
 
 ## How it was measured
 
-Three harnesses, all committed, all scored by code in the repository rather than by hand.
+Three harnesses, all committed, all scored by code in the repository rather than by hand:
 
 - **Offline.** `mine/time-sampled-points.ts` turns transcripts into decision points — a point is a
   completed agent turn, labelled by what a human did inside one tick's window, with *no human message*
-  being a label (`leave`) rather than a missing value. `bench/runners/stage0.ts` scores the rules
-  alone on a fit half and a held-out half; `headtohead.ts` scores both supervisors on one evidence
-  base; `run.ts` runs a frozen task set against a model and writes a record into `bench/results/`
-  carrying its task-set sha, per-op recall, exact match, regret and nearest-rank latency.
+  being a label (`leave`) rather than a missing value. `bench/runners/stage0.ts` scores the rules on a
+  fit half and a held-out half; `headtohead.ts` scores both supervisors on one evidence base; `run.ts`
+  runs a frozen task set against a model and writes a `bench/results/` record carrying its task-set
+  sha, per-op recall, exact match, regret and nearest-rank latency.
 - **Live.** `AGENTFLEET_OBSERVE=1` runs the whole pipeline, writes what it *would* have done, then
   joins each decision to what the pane did next — so a pane the supervisor stayed quiet about, and
   which then never moved, becomes a counterexample row. That join is evidence no transcript could
   have produced: [docs/observe-protocol-2026-11-14.md](docs/observe-protocol-2026-11-14.md).
 - **The supervisor's own log** is a typed, append-only JSONL with one report over it. Rates are
-  `null` rather than `0` when the denominator is empty; percentiles are nearest-rank over values that
-  occurred; a field no stage can supply honestly is left out and named rather than written as zero:
+  `null` rather than `0` when the denominator is empty, percentiles are nearest-rank over values that
+  occurred, and a field no stage can supply honestly is named rather than written as zero:
   [docs/METRICS.md](docs/METRICS.md).
 
 **Records are public; data is not.** Mined rows, bench task sets and adapter archives are gitignored,
 and `npm run check:corpus` reads the *tracked* content and fails on a pane id, a session id, a
 terminal tail or a credential ([docs/CORPUS-POLICY.md](docs/CORPUS-POLICY.md)). A record cites its
-task-set sha and the rows travel out of band — which is why the bench cannot be re-run from a clone.
+task-set sha and the rows travel out of band, which is why the bench cannot be re-run from a clone.
 
 The design record is [docs/specs/agent-fleet-design.md](docs/specs/agent-fleet-design.md), what was
-rejected included; the register of everything known to be wrong or unverified is
-[docs/specs/LIMITATIONS.md](docs/specs/LIMITATIONS.md); the independent sceptical review of the plan
-is [docs/reviews/2026-10-26-plan-review.md](docs/reviews/2026-10-26-plan-review.md). Everything else
-in `docs/` is indexed in [docs/README.md](docs/README.md).
+rejected included; the register of everything wrong or unverified is
+[docs/specs/LIMITATIONS.md](docs/specs/LIMITATIONS.md); the plan's independent sceptical review is
+[docs/reviews/2026-10-26-plan-review.md](docs/reviews/2026-10-26-plan-review.md). Everything else in
+`docs/` is indexed in [docs/README.md](docs/README.md).
 
 ## What it does not do
 
@@ -192,11 +185,10 @@ in `docs/` is indexed in [docs/README.md](docs/README.md).
 - **It has not been scored against what a fleet actually did.** Every label it has been scored against
   is a transcript proxy. `declare_done` has zero mined targets, so its column reads `n/a` rather than
   as a result; the cross-agent inspector reports, never acts, and has never been scored at all; and
-  the live `stalled`:`progressed` base rate is too short to let one model be called better than
-  another rather than luckier.
+  the live `stalled`:`progressed` base rate is too short to tell one model from a luckier one.
 - **It does not know whether a nudge helps.** Observe can only label the silent side: a pane that
   moves after the supervisor stayed quiet is a nudge that was not needed, and a pane that stays still
-  is ambiguous between finished and stuck. Scoring a nudge requires sending one — a live trial, and a
+  is ambiguous between finished and stuck. Scoring a nudge requires sending one — a live trial, a
   different decision.
 
 ## Layout
