@@ -11,6 +11,7 @@ became is in [`../bench/results/`](../bench/results/).
 | [stage0-residue-2026-11-10.md](stage0-residue-2026-11-10.md) | The seven process rules measured alone on the mined corpus; the idle rule and where its `N` came from; the residue the rules leave; the model scored on that residue; and observe mode's first live run. The source for the coverage numbers on the front page. |
 | [retrospective-observe-2026-11-10.md](retrospective-observe-2026-11-10.md) | The local session corpus read as a supervisor record: the time-sampled decision point, the 60-second window and its sensitivity curve, what the miner excluded and why. |
 | [needle3-usage-review-2026-11-14.md](needle3-usage-review-2026-11-14.md) | A review of *how* the local engine was called: the four adapter faults, each with the measurement that proves it, and the corrected configuration. |
+| [headtohead-2026-11-24.md](headtohead-2026-11-24.md) | The decision model given its strongest framing against a bag of five cheap anomaly detectors, on one evidence base, same labels and same split — plus the live event stream's reading and which arm is recommended. Reproduced by `node bench/runners/headtohead.ts`. |
 | [needle3-timeout-probe-2026-11-10.md](needle3-timeout-probe-2026-11-10.md) | The probe that asked whether the engine ever emits an op given time rather than a deadline. Its record predates the adapter fix, so read it as harness history: see [../bench/results/INVALIDATED-needle3.md](../bench/results/INVALIDATED-needle3.md). |
 
 ## Live observation
